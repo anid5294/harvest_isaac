@@ -35,9 +35,10 @@ hydra-core
 tensorboard
 moviepy
 
-# LeRobot Dataset v3 writer dependencies. Install LeRobot itself with --no-deps
-# so its resolver cannot replace Isaac-compatible PyTorch packages.
-# lerobot==0.4.3
+# LeRobot v3 is the default writer. Install lerobot==0.4.3 separately with
+# --no-deps as documented in README.md: its generic dependency constraints
+# conflict with the Isaac Sim 4.5-compatible Torch/Torchvision pins above.
+# The independent v2.1 exporter remains selectable with --lerobot-version 2.1.
 datasets==4.1.1
 pyarrow==25.0.1
 pandas==2.3.3

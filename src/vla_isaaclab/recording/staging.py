@@ -33,11 +33,12 @@ class StagingHDF5Writer:
         task = frame.pop("task")
         self.frames.append(({key: np.asarray(value) for key, value in frame.items()}, task))
 
-    def save_episode(self) -> None:
+    def save_episode(self, success: bool) -> None:
         if not self.frames:
             raise RuntimeError("Cannot save an empty episode")
         group = self.file.create_group(f"episodes/episode_{self.episode_count:06d}")
         group.attrs["task"] = self.frames[0][1]
+        group.attrs["success"] = bool(success)
         for key in self.frames[0][0]:
             values = np.stack([frame[key] for frame, _ in self.frames])
             options = {"compression": "gzip", "compression_opts": 1, "shuffle": True} if values.ndim > 1 else {}

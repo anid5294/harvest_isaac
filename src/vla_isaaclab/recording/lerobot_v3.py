@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 
+import h5py
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
 
 
@@ -33,6 +34,7 @@ class LeRobotV3Writer:
         self.metadata = metadata
         self.episode_count = 0
         self.frame_count = 0
+        self.episode_success = []
         self._pending_frames = 0
         self._closed = False
         self.dataset = LeRobotDataset.create(
@@ -66,12 +68,13 @@ class LeRobotV3Writer:
         self.dataset.add_frame(frame)
         self._pending_frames += 1
 
-    def save_episode(self) -> None:
+    def save_episode(self, success: bool) -> None:
         if self._closed:
             raise RuntimeError("Cannot save an episode after finalization")
         self.dataset.save_episode(parallel_encoding=False)
         self.episode_count += 1
         self.frame_count += self._pending_frames
+        self.episode_success.append(bool(success))
         self._pending_frames = 0
         self._write_manifest(complete=False)
 
@@ -101,3 +104,66 @@ class LeRobotV3Writer:
             self._write_manifest(complete=False)
         finally:
             self._closed = True
+
+
+def export_staging_to_v3(
+    staging_path: Path,
+    root: Path,
+    dataset_name: str,
+    include_failed_episodes: bool = False,
+) -> Path:
+    """Convert one complete staging file using the official LeRobot v3 API."""
+    with h5py.File(staging_path, "r") as stream:
+        if not bool(stream.attrs.get("complete", False)):
+            raise RuntimeError(f"Staging recording is incomplete: {staging_path}")
+        features = json.loads(stream.attrs["features"])
+        for feature in features.values():
+            feature["shape"] = tuple(feature["shape"])
+        metadata = json.loads(stream.attrs["metadata"])
+        metadata["source_recording"] = str(staging_path.resolve())
+        metadata["lerobot_version"] = "3"
+        episode_names = sorted(stream["episodes"])
+        eligible_episode_names = [
+            name
+            for name in episode_names
+            if include_failed_episodes
+            or bool(stream[f"episodes/{name}"].attrs.get("success", False))
+        ]
+        if not eligible_episode_names:
+            raise RuntimeError(
+                "No successful episodes are available for the default imitation export. "
+                "The source HDF5 is retained; use --include-failed-episodes only for audit datasets."
+            )
+        skipped_failed = len(episode_names) - len(eligible_episode_names)
+
+        writer = LeRobotV3Writer(
+            root=root,
+            dataset_name=dataset_name,
+            features=features,
+            metadata=metadata,
+        )
+        try:
+            for episode_name in eligible_episode_names:
+                episode = stream[f"episodes/{episode_name}"]
+                success = bool(episode.attrs.get("success", False))
+                task = str(episode.attrs["task"])
+                for frame_index in range(int(episode.attrs["length"])):
+                    frame = {key: episode[key][frame_index] for key in episode}
+                    frame["task"] = task
+                    writer.add_frame(frame)
+                writer.save_episode(success=success)
+            writer.metadata["contains_failed_episodes"] = not all(writer.episode_success)
+            writer.metadata["default_imitation_training_eligible"] = all(writer.episode_success)
+            writer.metadata["failed_source_episodes_excluded"] = skipped_failed
+            writer.metadata["episode_success"] = writer.episode_success
+            collection = writer.metadata.setdefault("collection", {})
+            collection["source_recording"] = writer.metadata["source_recording"]
+            collection["contains_failed_episodes"] = writer.metadata["contains_failed_episodes"]
+            collection["default_imitation_training_eligible"] = writer.metadata[
+                "default_imitation_training_eligible"
+            ]
+            collection["failed_source_episodes_excluded"] = skipped_failed
+            return writer.finalize()
+        except BaseException:
+            writer.abort()
+            raise

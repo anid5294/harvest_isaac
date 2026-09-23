@@ -1,6 +1,5 @@
-"""Composable Isaac Lab simulation platform."""
+"""VLA Isaac Lab environments and scripted data-collection policies."""
 
-from .contracts import ScenarioSelection
-from .registry import list_components, register_defaults
+from . import envs  # noqa: F401  Register Gym environments on package import.
 
-__all__ = ["ScenarioSelection", "list_components", "register_defaults"]
+__all__ = ["envs"]

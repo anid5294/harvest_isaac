@@ -11,7 +11,7 @@ import tempfile
 from pathlib import Path
 
 import numpy as np
-from lerobot.datasets.lerobot_dataset import LeRobotDataset
+import pyarrow.parquet as pq
 
 
 PROJECT = Path(__file__).resolve().parents[1]
@@ -27,13 +27,31 @@ def main() -> int:
     args = parser.parse_args()
 
     root = args.dataset.resolve()
-    manifest = json.loads((root / "meta/simulation.json").read_text())
-    dataset = LeRobotDataset(manifest["lerobot_repo_id"], root=root, video_backend="pyav")
-    tabular = dataset.hf_dataset.with_format("numpy")
-    episode_indices = np.asarray(tabular["episode_index"])
-    mask = episode_indices == args.episode
-    actions = np.asarray(tabular["sim.action.normalized"])[mask]
-    seeds = np.asarray(tabular["sim.seed"])[mask]
+    if (root / "meta/simulation.json").is_file():
+        from lerobot.datasets.lerobot_dataset import LeRobotDataset
+
+        manifest = json.loads((root / "meta/simulation.json").read_text())
+        dataset = LeRobotDataset(manifest["lerobot_repo_id"], root=root, video_backend="pyav")
+        tabular = dataset.hf_dataset.with_format("numpy")
+        mask = np.asarray(tabular["episode_index"]) == args.episode
+        actions = np.asarray(tabular["sim.action.normalized"])[mask]
+        seeds = np.asarray(tabular["sim.seed"])[mask]
+        environment_id = manifest["environment_id"]
+    else:
+        info = json.loads((root / "meta/info.json").read_text())
+        collection = json.loads((root / "meta/collection.json").read_text())
+        if info.get("codebase_version") != "v2.1":
+            raise ValueError(f"Expected LeRobot v2.1, found {info.get('codebase_version')}")
+        chunk = args.episode // int(info["chunks_size"])
+        parquet_path = root / info["data_path"].format(
+            episode_chunk=chunk, episode_index=args.episode
+        )
+        if not parquet_path.is_file():
+            raise IndexError(f"Episode {args.episode} is not present in {root}")
+        table = pq.read_table(parquet_path, columns=["sim.action.normalized", "sim.seed"])
+        actions = np.asarray(table["sim.action.normalized"].to_pylist(), dtype=np.float32)
+        seeds = table["sim.seed"].to_numpy(zero_copy_only=False)
+        environment_id = collection["environment_id"]
     if not len(actions):
         raise IndexError(f"Episode {args.episode} is not present in {root}")
 
@@ -48,7 +66,7 @@ def main() -> int:
             episode_path,
             actions=actions.astype(np.float32),
             seed=np.asarray(int(seeds.reshape(-1)[0]), dtype=np.int64),
-            scenario=np.asarray(json.dumps(manifest["scenario"])),
+            environment_id=np.asarray(environment_id),
             dataset=np.asarray(str(root)),
             episode=np.asarray(args.episode, dtype=np.int64),
         )

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Convert a neutral simulation staging file to LeRobot Dataset v3."""
+"""Convert a neutral simulation staging file to LeRobot Dataset v3 or v2.1."""
 
 from __future__ import annotations
 
@@ -8,52 +8,44 @@ import json
 import sys
 from pathlib import Path
 
-import h5py
-
 PROJECT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT / "src"))
 
-from vla_isaaclab.recording.lerobot_v3 import LeRobotV3Writer
+from vla_isaaclab.recording.lerobot_v21 import export_staging_to_v21
+from vla_isaaclab.recording.lerobot_v3 import export_staging_to_v3
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("staging", type=Path)
-    parser.add_argument("--keep-staging", action="store_true")
+    parser.add_argument(
+        "--lerobot-version", choices=("3", "2.1"), default="3",
+        help="Output dataset format (default: 3).",
+    )
+    parser.add_argument("--delete-staging", action="store_true")
+    parser.add_argument(
+        "--include-failed-episodes", action="store_true",
+        help="Create a source-review export containing failures; never use it as the default imitation export.",
+    )
     args = parser.parse_args()
 
     staging_path = args.staging.resolve()
     dataset_name = staging_path.stem
-    with h5py.File(staging_path, "r") as stream:
-        if not bool(stream.attrs.get("complete", False)):
-            raise RuntimeError(f"Staging recording is incomplete: {staging_path}")
-        features = json.loads(stream.attrs["features"])
-        for feature in features.values():
-            feature["shape"] = tuple(feature["shape"])
-        metadata = json.loads(stream.attrs["metadata"])
-        writer = LeRobotV3Writer(
-            root=PROJECT / "outputs/lerobot",
-            dataset_name=dataset_name,
-            features=features,
-            metadata=metadata,
-        )
-        try:
-            for episode_name in sorted(stream["episodes"]):
-                episode = stream[f"episodes/{episode_name}"]
-                task = str(episode.attrs["task"])
-                for frame_index in range(int(episode.attrs["length"])):
-                    frame = {key: episode[key][frame_index] for key in episode}
-                    frame["task"] = task
-                    writer.add_frame(frame)
-                writer.save_episode()
-            final_path = writer.finalize()
-        except BaseException:
-            writer.abort()
-            raise
+    exporter = export_staging_to_v3 if args.lerobot_version == "3" else export_staging_to_v21
+    final_path = exporter(
+        staging_path=staging_path,
+        root=PROJECT / "outputs/lerobot",
+        dataset_name=dataset_name,
+        include_failed_episodes=args.include_failed_episodes,
+    )
 
-    if not args.keep_staging:
+    if args.delete_staging:
         staging_path.unlink()
-    print(json.dumps({"dataset": str(final_path), "source": str(staging_path)}, indent=2))
+    print(json.dumps({
+        "dataset": str(final_path),
+        "source": str(staging_path),
+        "lerobot_version": args.lerobot_version,
+    }, indent=2))
     return 0
 
 

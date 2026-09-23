@@ -32,13 +32,11 @@ def main() -> int:
             "file": str(args.dataset.resolve()),
             "metadata": metadata,
             "episodes": {},
-            "valid": True,
+            "valid": bool(episodes),
         }
         for episode_name in episodes:
             episode = stream[f"data/{episode_name}"]
             required = list(COMMON_DATASETS)
-            if metadata.get("task") == "Task-PickPlace-v0":
-                required.extend(("states/rigid_object/object/root_pose", "states/rigid_object/goal/root_pose"))
             missing = [name for name in required if name not in episode]
             summary["episodes"][episode_name] = {
                 "steps": int(episode.attrs["num_samples"]),

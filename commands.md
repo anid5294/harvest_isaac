@@ -1,4 +1,4 @@
-# 常用命令
+# Common Commands
 
 ```bash
 cd <vla_isaaclab-checkout>
@@ -7,35 +7,44 @@ source scripts/activate.sh
 check_install_environment
 ```
 
-查看注册组件：
+List registered environments:
 
 ```bash
-./scripts/run_scenario.sh --headless --list-components
+./scripts/run_env.sh --headless --physics-only --list-tasks
 ```
 
-预览 G1、白桌、四个 YCB 物体和 RGB-D 相机：
+Preview G1, the white table, four YCB objects, and the RGB-D cameras:
 
 ```bash
-./scripts/run_scenario.sh --headless \
-  --objects Objects-YCB-Basic-v0 \
-  --task Task-ScenePreview-v0 \
-  --controller Controller-Standing-v0 \
+./scripts/run_env.sh --headless \
+  --task VLA-ScenePreview-YCB-G1-v0 \
   --steps 240 \
   --preview-video outputs/previews/vla_isaaclab_scene_preview.mp4
 ```
 
-HDF5 录制、检查与回放：
+Record and inspect an HDF5 dataset:
 
 ```bash
-./scripts/record_scenario.sh --dataset-name scenario_smoke
-python scripts/inspect_dataset.py outputs/datasets/scenario_smoke.hdf5
-./scripts/replay_dataset.sh outputs/datasets/scenario_smoke.hdf5 --headless
+./scripts/record_env.sh --dataset-name environment_smoke
+python scripts/inspect_dataset.py outputs/datasets/environment_smoke.hdf5
 ```
 
-LeRobot v3 录制、检查与回放：
+Record a successful sugar-box demonstration as a LeRobot v3 dataset
+(one episode, up to 1,200 steps):
 
 ```bash
-./scripts/record_lerobot.sh --dataset-name lerobot_smoke
-python scripts/inspect_lerobot.py outputs/lerobot/lerobot_smoke
-./scripts/replay_lerobot.sh outputs/lerobot/lerobot_smoke --episode 0 --headless
+./scripts/record_lerobot.sh \
+  --dataset-name sugar_box_demo \
+  --lerobot-version 3 \
+  --episodes 1 \
+  --steps 1200
+```
+
+`--lerobot-version` accepts `3` or `2.1` and defaults to `3`.
+
+The dataset is written to `outputs/lerobot/sugar_box_demo/`. Inspect and replay it with:
+
+```bash
+python scripts/inspect_lerobot.py outputs/lerobot/sugar_box_demo
+./scripts/replay_lerobot.sh outputs/lerobot/sugar_box_demo --episode 0 --headless
 ```

@@ -1,6 +1,6 @@
 [
   {
-    "path": "assets/Isaac/4.5/Isaac/IsaacLab/Robots/Unitree/G1/g1.usd",
+    "path": "assets/Isaac/4.5/Isaac/IsaacLab/Robots/Unitree/G1/g1_23dof_legacy.usd",
     "source": "https://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/4.5/Isaac/IsaacLab/Robots/Unitree/G1/g1.usd",
     "bytes": 22183713,
     "sha256": "cd7303a1859321ed94999b5ed23fa7c45d67ad0d44ace0e24a6c5ea6b7ad3422"

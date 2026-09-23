@@ -8,7 +8,7 @@ import torch
 
 spec = importlib.util.spec_from_file_location(
     "bounded_ik", Path(__file__).resolve().parents[1]
-    / "src/vla_isaaclab/controllers/bounded_ik.py",
+    / "src/vla_isaaclab/policies/bounded_ik.py",
 )
 module = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(module)

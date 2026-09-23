@@ -1,75 +1,27 @@
 # vla_isaaclab
 
-`vla_isaaclab` is a robotics simulation framework built on **Isaac Lab**, with
-**Isaac Sim** serving as the underlying simulation runtime.
-
-It provides:
-
-- a reproducible Isaac Lab / Isaac Sim runtime
-- composable robotic manipulation scenarios
-- robot and asset definitions
-- task and control interfaces
-- scripted experts
-- LeRobot v3 recording
-
-The project separates scene composition, robot definitions, task logic, expert
-strategies, low-level control, and dataset recording so that different
-manipulation tasks can reuse the same simulation and control infrastructure.
-
-## Architecture
-
-A complete simulation `Scenario` is composed of the following components:
-
-```text
-Scenario
-├── World       geometry and semantic frames
-├── Robot       asset, joint groups, limits, end effectors, reset pose
-├── Objects     physical assets and semantic roles
-├── Sensors     camera and contact definitions
-├── Task        observation, reward, success, termination, goal
-├── Expert      optional scripted strategy and EE/gripper targets
-├── Controller  reusable IK/control and normalized action generation
-└── Recorder    state, action, image, and metadata export
-```
-
-For a scripted task:
-
-```text
-Task state -> Expert -> EndEffectorTarget -> Controller -> normalized action
-           -> env.step() -> Isaac Lab ActionTerm -> robot
-```
-
-Component responsibilities are kept separate:
-
-- `Task` defines task state, goals, rewards, success conditions, and
-  termination, but does not contain task phases, IK, or joint-level control.
-- `Expert` defines the high-level scripted strategy and produces end-effector
-  and gripper targets, but does not implement Jacobians or action normalization.
-- `Controller` implements reusable IK, robot control, and action mapping without
-  containing object-specific or task-specific strategy.
-- `Robot` defines the shared joint order, joint limits, joint groups,
-  end-effector frames, and reset pose.
-- `Recorder` independently handles state, action, image, and metadata recording
-  and dataset export.
-
-This separation allows Tasks, Experts, Robots, Objects, and Controllers to be
-composed and reused without coupling task semantics to low-level robot control.
+`vla_isaaclab` is a robotics simulation framework for developing, running,
+validating, and recording manager-based environments. It uses Isaac Sim as the
+simulation runtime and Isaac Lab as the environment framework.
 
 ## Environment model
 
-Isaac Lab is a shared external dependency on the lab server. All developers use
-the same pinned Isaac Lab `v2.0.2` checkout:
+Isaac Lab is a shared, read-only external dependency on the lab server:
 
 ```text
-/media/data-ssd/software/IsaacLab-v2.0.2
+shared
+└── /media/data-ssd/software/IsaacLab-v2.0.2
+
+per developer
+├── own Conda environment
+├── own vla_isaaclab checkout
+└── own outputs and Kit caches
 ```
 
-Each developer maintains their own:
-
-- Conda environment
-- `vla_isaaclab` checkout
-- `outputs/`
-- Isaac Sim / Kit caches
+All developers use the pinned Isaac Lab `v2.0.2` checkout. They do not clone or
+modify Isaac Lab inside this repository. Each developer installs this project
+in their own Conda environment and keeps an independent checkout, generated
+outputs, and local caches.
 
 | Component | Version |
 | --- | --- |
@@ -77,30 +29,12 @@ Each developer maintains their own:
 | Isaac Sim | 4.5.0.0 |
 | Isaac Lab | v2.0.2 |
 | PyTorch | 2.5.1+cu121 |
-| LeRobot | 0.4.3 / Dataset v3 |
-
-`environment.yml` defines the Conda base environment. `requirements.txt` pins
-Isaac Sim, PyTorch, Isaac Lab runtime dependencies, and recording packages.
-
-`ISAACLAB_ROOT` identifies the shared Isaac Lab source. It defaults to the
-server path above in `scripts/activate.sh` and may be overridden on another
-server. The shared checkout must exist and correspond to tag `v2.0.2`.
-Developers do not clone or modify Isaac Lab themselves.
+| LeRobot dataset | v3 (default), v2.1 (optional) |
 
 ## Installation
 
-Prerequisites:
-
-- access to the shared Isaac Lab path
-- Linux
-- NVIDIA GPU and a driver compatible with Isaac Sim 4.5
-- Git
-- an initialized Miniconda or Mambaforge shell
-
-The first dependency installation may download large NVIDIA Python packages,
-but it does not download Isaac Lab.
-
-### New developer setup
+Prerequisites are Linux, an NVIDIA GPU/driver compatible with Isaac Sim 4.5,
+Git, Conda, and read access to the shared Isaac Lab checkout.
 
 Choose your own Conda environment name:
 
@@ -118,9 +52,8 @@ python -m pip install -r requirements.txt
 python -m pip install --no-deps lerobot==0.4.3
 ```
 
-The Git command must print `v2.0.2`. Link the five shared Isaac Lab package
-roots into the active developer-owned environment without writing into the
-shared checkout:
+The Git command must print `v2.0.2`. Link the shared packages into this Conda
+environment without writing to the shared checkout:
 
 ```bash
 python - <<'PY'
@@ -129,13 +62,7 @@ import site
 from pathlib import Path
 
 root = Path(os.environ["ISAACLAB_ROOT"]).resolve()
-packages = (
-    "isaaclab",
-    "isaaclab_assets",
-    "isaaclab_mimic",
-    "isaaclab_rl",
-    "isaaclab_tasks",
-)
+packages = ("isaaclab", "isaaclab_assets", "isaaclab_mimic", "isaaclab_rl", "isaaclab_tasks")
 paths = [root / "source" / package for package in packages]
 missing = [path for path in paths if not (path / path.name).is_dir()]
 if missing:
@@ -151,258 +78,202 @@ source scripts/activate.sh
 check_install_environment
 ```
 
-To update an existing environment after dependency changes:
-
-```bash
-conda activate <your-env>
-conda env update --name <your-env> --file environment.yml
-python -m pip install -r requirements.txt
-python -m pip install --no-deps lerobot==0.4.3
-python -m pip install -e .
-```
-
-Repeat the `.pth` linking step if `ISAACLAB_ROOT` changes or the environment is
-recreated.
+There is intentionally no bootstrap script. `activate.sh` never guesses a
+developer environment: activate it first, or explicitly set
+`VLA_ISAACLAB_ENV=<your-env>`.
 
 ## Daily use
-
-Activate your own environment first. `activate.sh` never guesses an environment
-name and never falls back to another developer's environment:
 
 ```bash
 conda activate <your-env>
 source scripts/activate.sh
 check_install_environment
-./scripts/run_scenario.sh --headless --list-components
+./scripts/run_env.sh --headless --physics-only --list-tasks
 ```
 
-The run, record, replay, and asset-preparation wrappers source `activate.sh`
-internally and preserve the already active non-`base` Conda environment. Once
-the environment is active, the runner can also be used directly:
+Wrappers source `activate.sh` but preserve the already selected non-`base`
+environment. `ISAACLAB_ROOT` defaults to the shared server path and remains
+overridable.
 
-```bash
-python scripts/run_scenario.py --headless --list-components
-```
-
-To select an environment explicitly instead:
-
-```bash
-export VLA_ISAACLAB_ENV=<your-env>
-source scripts/activate.sh
-```
-
-## Project layout
+## Architecture
 
 ```text
 vla_isaaclab/
-├── environment.yml              reproducible Conda base
-├── requirements.txt             pinned Python/runtime packages
-├── pyproject.toml               installable `vla_isaaclab` package
-├── assets/                      USD, YCB, robot, and scene assets
-├── configs/                     Kit and recording configuration
-├── scripts/                     run, record, replay, asset utilities
+├── assets/                          local robot, YCB, dinnerware, microwave assets
+├── configs/                         Isaac Sim Kit configurations
+├── scripts/
+│   ├── activate.sh                 environment verification and local caches
+│   ├── run_env.py/.sh              generic Gym environment runner
+│   ├── record_lerobot.sh            LeRobot v3/v2.1 data generation
+│   ├── replay_lerobot.py/.sh        normalized-action replay
+│   └── prepare_*.py/.sh             asset preparation utilities
 ├── src/vla_isaaclab/
-│   ├── worlds/                  tables, pedestals, semantic workspace frames
-│   ├── robots/                  robot definitions, joints, limits, EE frames
-│   ├── objects/                 YCB and other object-set adapters
-│   ├── sensors/                 RGB-D/contact configuration
-│   ├── tasks/                   state, reward, success, termination
-│   ├── experts/                 scripted task strategies
-│   ├── controllers/             IK and normalized action generation
-│   ├── recording/               HDF5 staging and LeRobot v3 export
-│   ├── actions.py               normalized ActionTerm mapping
-│   └── scenario.py              component compatibility and composition
-├── tests/                       non-simulator unit tests
-└── outputs/                     local caches, previews, recordings (ignored)
+│   ├── envs/
+│   │   ├── common/
+│   │   │   ├── base.py             common simulation timing/material settings
+│   │   │   ├── g1.py               reusable G1 config and joint semantics
+│   │   │   ├── managers.py         built-in action, observations, reset events
+│   │   │   └── scene.py            shared table/light/camera helpers
+│   │   ├── scene_preview/
+│   │   │   ├── __init__.py         three Gym registrations
+│   │   │   └── env_cfg.py          YCB, dinnerware, microwave complete scenes
+│   │   └── ycb_sugar_box/
+│   │       ├── __init__.py         sugar-box Gym registration
+│   │       ├── env_cfg.py          G1 + one sugar box + all manager configs
+│   │       └── mdp/                 command, observation, reward, termination terms
+│   ├── policies/
+│   │   ├── standing.py             normalized default-pose policy
+│   │   ├── ycb_sugar_box*.py       scripted phases and action generation
+│   │   ├── bounded_ik.py           bounded DLS IK helper
+│   │   └── joint_limits.py         inverse of the built-in action mapping
+│   └── recording/                   HDF5 staging and LeRobot v3/v2.1 pipeline
+├── tests/                           simulator-free unit tests
+└── outputs/                         local caches/videos/datasets; ignored by Git
 ```
 
-## Core interface conventions
+Reusable G1, table, lighting, camera, action, observation, and reset
+configuration lives under `envs/common`. Each concrete environment owns its
+scene assets and task-specific configuration.
 
-The project maintains shared interface conventions so that different scenarios
-and tasks can be composed consistently.
-
-### Robot
-
-`RobotDefinition` defines:
-
-- joint names and joint order
-- joint limits
-- joint groups
-- end-effector frame names
-- reset pose
-- action mapping
-
-Tasks and controllers should not maintain independent robot joint definitions.
-
-### Objects
-
-Object definitions provide:
-
-- asset source
-- physical dimensions
-- mass
-- collision properties
-- semantic role
-- initial pose
-
-Tasks should access object state through a consistent object interface rather
-than depending on asset-specific USD internals.
-
-### Coordinate frames
-
-World, Robot, Object, and End Effector use explicit coordinate-frame
-conventions. Scenario-specific semantic frames should be defined by World,
-Robot, or Object components rather than being scattered across Task or Expert
-implementations.
-
-### Actions
-
-Controllers convert:
+Each simulation setup is registered as a complete Gym environment:
 
 ```text
-EndEffectorTarget
-        ↓
-physical robot target
-        ↓
-normalized simulation action
+Gym environment ID
+└── concrete EnvCfg
+    ├── InteractiveSceneCfg     robot, scene assets, camera
+    ├── ActionManager          normalized 43-D joint action
+    ├── CommandManager         task goal, when applicable
+    ├── ObservationManager     policy/task observations
+    ├── EventManager           reset and joint targets
+    ├── RewardManager          task rewards
+    ├── TerminationManager     success/failure/time-out
+    └── RecorderManager        HDF5 state/action/camera recording
 ```
 
-into actions executable by the Isaac Lab `ActionTerm`. Physical state and
-normalized simulation actions are stored separately in recorded datasets.
+The environment interface is a normalized 43-D joint action. Isaac Lab's
+`JointPositionToLimitsActionCfg` maps it to G1 joint-position targets.
 
-## Component registration and selection
+## Registration and extension
 
-Each World, Robot, Objects, Sensors, Task, Expert, and Controller definition
-has a unique `component_id`. The corresponding package `__init__.py` registers
-the definition with `src/vla_isaaclab/registry.py`. At startup,
-`register_defaults()` loads those registrations, and command-line values such
-as `--world World-Tabletop-v0` and `--objects Objects-YCB-Basic-v0` select them
-by ID. `src/vla_isaaclab/scenario.py` then checks component capabilities and
-composes the selected modules into one scenario.
+Importing `vla_isaaclab` registers these IDs with Gymnasium:
 
-Use the following command to see every currently registered ID:
+- `VLA-ScenePreview-YCB-G1-v0`
+- `VLA-ScenePreview-Dinnerware-G1-v0`
+- `VLA-ScenePreview-Microwave-G1-v0`
+- `VLA-YCBSugarBox-G1-JointPos-v0`
 
-```bash
-./scripts/run_scenario.sh --headless --list-components
-```
+To add a task, create a complete EnvCfg under `src/vla_isaaclab/envs/`, keep its
+MDP terms beside it, and register the EnvCfg in that environment package's
+`__init__.py`. Add a scripted policy only when deterministic demonstrations are
+needed. Use Isaac Lab manager terms and action configurations for environment
+behavior and interfaces.
 
-When adding a component, define its `component_id`, import it in its module
-package `__init__.py`, and add it to that package's `register_*()` function.
+Camera placement belongs to the concrete scene's EnvCfg because framing depends
+on the object layout. Shared camera intrinsics/modalities belong in the common
+camera helper. Thus, change `CAMERA_EYE`/`CAMERA_TARGET` in the concrete env to
+reframe one task, and change `camera_cfg()` to alter camera hardware across all
+tasks.
 
 ## Scene preview examples
 
-The same preview command is used for all three scenes:
+Use one command and choose one of three task IDs:
 
 ```bash
-./scripts/run_scenario.sh --headless --enable_cameras \
-  --world <WORLD_ID> \
-  --objects <OBJECTS_ID> \
-  --task Task-ScenePreview-v0 \
-  --controller Controller-Standing-v0 \
-  --steps 240 \
+./scripts/run_env.sh --headless \
+  --task <TASK_ID> --steps 240 \
   --preview-video outputs/previews/<NAME>.mp4
 ```
 
-Choose one option:
+| Preview | `TASK_ID` | `NAME` |
+| --- | --- | --- |
+| YCB objects | `VLA-ScenePreview-YCB-G1-v0` | `ycb` |
+| Bowl and plate | `VLA-ScenePreview-Dinnerware-G1-v0` | `dinnerware` |
+| Microwave | `VLA-ScenePreview-Microwave-G1-v0` | `microwave` |
 
-| Preview | `WORLD_ID` | `OBJECTS_ID` | `NAME` |
-| --- | --- | --- | --- |
-| YCB objects | `World-Tabletop-v0` | `Objects-YCB-Basic-v0` | `ycb` |
-| Bowl and plate | `World-Tabletop-v0` | `Objects-Dinnerware-v0` | `dinnerware` |
-| Microwave | `World-MicrowaveTabletop-v0` | `Objects-Microwave-v0` | `microwave` |
+## Reference task: YCB sugar box
 
-YCB and dinnerware share the tabletop layout and camera pose; only the Objects
-component changes. The microwave selects a different World because it needs a
-different robot distance, object placement, and camera pose.
+The table contains only `004_sugar_box`. Relevant code is:
 
-## Reference scenario: YCB sugar box
+- complete environment: `src/vla_isaaclab/envs/ycb_sugar_box/env_cfg.py`
+- MDP terms: `src/vla_isaaclab/envs/ycb_sugar_box/mdp/`
+- G1 configuration: `src/vla_isaaclab/envs/common/g1.py`
+- built-in action configuration: `src/vla_isaaclab/envs/common/managers.py`
+- scripted phases: `src/vla_isaaclab/policies/ycb_sugar_box_strategy.py`
+- IK and action generation: `src/vla_isaaclab/policies/ycb_sugar_box.py`
+- bounded IK helper: `src/vla_isaaclab/policies/bounded_ik.py`
 
-The current deterministic reference task uses only:
+The scripted policy and environment interact through the standard action
+interface:
 
 ```text
-004_sugar_box
+registered EnvCfg + manager state
+        ↓
+scripted policy (task phases + bounded IK + three-finger targets)
+        ↓
+physical joint targets
+        ↓  q -> 2 * (q - lower) / (upper - lower) - 1
+normalized 43-D action
+        ↓
+Isaac Lab JointPositionToLimitsActionCfg
+        ↓
+G1 joint-position targets
 ```
 
-Implementation paths:
-
-- Object registration: `src/vla_isaaclab/objects/ycb.py`
-- Task and success conditions: `src/vla_isaaclab/tasks/ycb_pick_place_sugar_box.py`
-- Scripted grasp strategy: `src/vla_isaaclab/experts/ycb_pick_place_sugar_box.py`
-- Differential IK controller: `src/vla_isaaclab/controllers/left_arm_differential_ik.py`
-- G1 robot/joint definition: `src/vla_isaaclab/robots/unitree_g1.py`
-- Normalized joint ActionTerm: `src/vla_isaaclab/actions.py`
-- Scenario runner and recording gate: `scripts/run_scenario.py`
-
-The box starts:
-
-- upright
-- at XY position `(0.010509, -0.290489)` m
-- with world-Z yaw `35.81856°`
-
-The left hand performs a calibrated three-finger side grasp. It then:
-
-1. grasps the sugar box
-2. lifts it by 8 cm
-3. moves it 2 cm toward the robot's left side, corresponding to world `-X`
-4. levels the object
-5. lowers it
-6. releases it
-7. withdraws the hand
-
-Run:
+The box starts upright at XY `(0.010509, -0.290489)` m with world-Z yaw
+`35.81856°`. The three-finger side grasp lifts it 8 cm, moves it 2 cm toward
+robot-left (world `-X`), levels and releases it, then withdraws the hand.
 
 ```bash
-./scripts/run_scenario.sh --headless --enable_cameras \
-  --objects Objects-YCB-SugarBox-v0 \
-  --task Task-YCBPickPlaceSugarBox-v0 \
-  --expert Expert-YCBPickPlaceSugarBox-v0 \
-  --controller Controller-LeftArmDifferentialIK-v0 \
-  --steps 1800 \
-  --preview-video outputs/videos/sugar_box_pick_place/attempt.mp4
+./scripts/run_env.sh --headless \
+  --task VLA-YCBSugarBox-G1-JointPos-v0 \
+  --steps 1200 \
+  --preview-video outputs/videos/sugar_box/attempt.mp4
 ```
 
-The recorded reference run reached Task success at `step 961`. Success requires:
-
-- XY error <= 15 mm
-- height error <= 15 mm
-- low object speed
-- palm separation > 20 cm
-- a 15-step hold after release
-
-Failed sugar-box episodes are rejected by the LeRobot exporter and are not
-included in the final training dataset.
+The validated reference fires the named `success` termination at step 961.
+Success requires <=15 mm XY/height error, low object speed, palm separation
+over 20 cm, and a 15-step hold. A failed run must never be labeled or saved as
+a successful demonstration.
 
 ## Recording
 
-HDF5 is used as a debug/raw format. LeRobot v3 is the training format.
-
-A LeRobot recording first writes an atomic local HDF5 staging file and then
-automatically converts it to:
-
-```text
-outputs/lerobot/<dataset-name>/
-```
-
-No manual conversion step is required.
-
-Example:
+Generate a contract-aligned LeRobot v3 dataset directly; no user-run conversion step is needed:
 
 ```bash
-./scripts/run_scenario.sh --headless \
-  --objects Objects-YCB-SugarBox-v0 \
-  --task Task-YCBPickPlaceSugarBox-v0 \
-  --expert Expert-YCBPickPlaceSugarBox-v0 \
-  --controller Controller-LeftArmDifferentialIK-v0 \
-  --record-format lerobot --episodes 1 --steps 1500 \
-  --dataset-name sugar_box_demo
+./scripts/record_lerobot.sh --dataset-name sugar_box_demo
 ```
 
-Replay a generated dataset with:
+LeRobot v3 is the default. Select the v2.1 layout explicitly when required:
+
+```bash
+./scripts/record_lerobot.sh --dataset-name sugar_box_demo_v21 \
+  --lerobot-version 2.1
+```
+
+The dataset contains 43-D measured joint state and processed absolute targets,
+normalized simulator action, environment state, source timestamps, phase,
+reward/done/success, seed, and RGB. The writer retains an HDF5 source recording,
+preserves unsuccessful episodes with `success: false`, and atomically converts
+to `outputs/lerobot/<dataset-name>/`.
+
+By default, only successful episodes are exported for imitation training. To
+materialize failed episodes for source/contract review, add
+`--include-failed-episodes`; the resulting `collection.json` marks that export
+as training-ineligible. The retained HDF5 source always keeps the true outcome.
+
+Validate the result (the flag records the currently approved right-wrist-camera
+exception):
+
+```bash
+python scripts/inspect_lerobot.py outputs/lerobot/sugar_box_demo \
+  --allow-missing-right-wrist
+```
+
+Replay normalized actions with:
 
 ```bash
 ./scripts/replay_lerobot.sh outputs/lerobot/sugar_box_demo --episode 0 --headless
 ```
 
-`outputs/` is intentionally ignored by Git. Validated datasets should be stored
-in a dataset registry or object store rather than committed to the source
-repository.
+`outputs/` is ignored by Git. Publish validated datasets to a dataset registry
+or object store rather than committing them.
