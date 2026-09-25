@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import math
+from datetime import datetime, timezone
 from pathlib import Path
 
 from isaaclab_arena.cli.isaaclab_arena_cli import (
@@ -27,8 +28,9 @@ IDLE = (
 )
 APPLE_NAME = "apple_01_objaverse_robolab"
 PLATE_NAME = "clay_plates_hot3d_robolab"
-APPLE_START = (0.15, 0.15, 0.05)
-PLATE_START = (0.15, 0.40, 0.02)
+TABLE_CENTER = (0.25, 0.20, 0.60)  # 0.04-m thick top; upper surface z=0.62 m
+APPLE_START = (0.0, 0.10, 0.68)
+PLATE_START = (0.0, 0.40, 0.64)
 
 
 def phase_at_step(step: int, warmup: int, phase_steps: int) -> tuple[str, float]:
@@ -75,24 +77,30 @@ def _world_points(env):
 
     scene = env.unwrapped.scene
     robot = scene["robot"]
-    pelvis = _as_torch(robot.data.body_link_state_w)[0, robot.data.body_names.index("pelvis"), :7]
+    body_poses = _as_torch(robot.data.body_link_pose_w)
+    pelvis = body_poses[0, robot.data.body_names.index("pelvis"), :7]
     rotation = matrix_from_quat(pelvis[3:7].unsqueeze(0))[0]
     apple_world = _as_torch(scene[APPLE_NAME].data.root_pos_w)[0]
     plate_world = _as_torch(scene[PLATE_NAME].data.root_pos_w)[0]
-    left_wrist = _as_torch(robot.data.body_link_state_w)[
-        0, robot.data.body_names.index("left_wrist_yaw_link"), :3
-    ]
+    left_wrist = body_poses[0, robot.data.body_names.index("left_wrist_yaw_link"), :3]
     local_apple = rotation.T @ (apple_world - pelvis[:3])
     local_plate = rotation.T @ (plate_world - pelvis[:3])
+    local_wrist = rotation.T @ (left_wrist - pelvis[:3])
     return (
         tuple(float(x) for x in local_apple),
         tuple(float(x) for x in local_plate),
         float(apple_world[2]),
+        float(plate_world[2]),
         float((apple_world - left_wrist).norm()),
+        tuple(float(x) for x in local_wrist),
+        tuple(float(x) for x in pelvis[:3]),
     )
 
 
-def _build_env(args):
+def _build_env(args, output: Path, video_prefix: str, total_steps: int):
+    import isaaclab.sim as sim_utils
+    from isaaclab.envs.utils.video_recorder_cfg import VideoRecorderCfg
+    from isaaclab_visualizers.kit import KitVisualizerCfg
     from isaaclab_arena.assets.registries import AssetRegistry
     from isaaclab_arena.embodiments.g1.g1 import G1WBCPinkEmbodiment
     from isaaclab_arena.environments.arena_env_builder import ArenaEnvBuilder
@@ -103,12 +111,19 @@ def _build_env(args):
     from isaaclab_arena.utils.pose import Pose
 
     registry = AssetRegistry()
-    table = registry.get_asset_by_name("table")()
+    ground = registry.get_asset_by_name("ground_plane")()
+    table = registry.get_asset_by_name("procedural_table")()
+    table.set_initial_pose(Pose(position_xyz=TABLE_CENTER, rotation_xyzw=(0, 0, 0, 1)))
+    table.object_cfg.spawn = table.object_cfg.spawn.copy()
+    table.object_cfg.spawn.visible = True
+    table.object_cfg.spawn.visual_material = sim_utils.PreviewSurfaceCfg(
+        diffuse_color=(0.96, 0.96, 0.96)
+    )
     apple = registry.get_asset_by_name(APPLE_NAME)()
     plate = registry.get_asset_by_name(PLATE_NAME)()
     apple.set_initial_pose(Pose(position_xyz=APPLE_START, rotation_xyzw=(0, 0, 0, 1)))
     plate.set_initial_pose(Pose(position_xyz=PLATE_START, rotation_xyzw=(0, 0, 0, 1)))
-    robot = G1WBCPinkEmbodiment(enable_cameras=False)
+    robot = G1WBCPinkEmbodiment(enable_cameras=True)
     robot.set_initial_pose(Pose(position_xyz=(-0.4, 0, 0), rotation_xyzw=(0, 0, 0, 1)))
     robot.set_finger_contact_friction(
         material_path="/World/Materials/g1_apple_fingers",
@@ -130,53 +145,75 @@ def _build_env(args):
         force_threshold=0.1, velocity_threshold=0.1,
         mimic_env_cfg_factory=mimic_cfg,
     )
+    def configure(env_cfg):
+        env_cfg = set_control_rate_50hz(env_cfg)
+        env_cfg.sim.visualizer_cfgs = [
+            KitVisualizerCfg(headless=True, eye=(-1.4, -1.2, 1.6), lookat=(0.05, 0.2, 0.4))
+        ]
+        env_cfg.video_recorders = [
+            VideoRecorderCfg(
+                source="visualizer:kit", output_dir=str(output),
+                output_filename_prefix=f"{video_prefix}_overview",
+                video_length=total_steps, fps=30, frame_stride=2,
+            ),
+            VideoRecorderCfg(
+                source="sensor:robot_head_cam", output_dir=str(output),
+                output_filename_prefix=f"{video_prefix}_head",
+                video_length=total_steps, fps=30, frame_stride=2,
+            ),
+        ]
+        return env_cfg
+
     arena_env = IsaacLabArenaEnvironment(
         name="g1_table_apple_grasp_trial", embodiment=robot,
-        scene=Scene(assets=[table, apple, plate]), task=task,
-        env_cfg_callback=set_control_rate_50hz,
+        scene=Scene(assets=[ground, table, apple, plate]), task=task,
+        env_cfg_callback=configure,
     )
-    return ArenaEnvBuilder(arena_env, arena_env_builder_cfg_from_argparse(args)).make_registered(
-        render_mode="rgb_array"
-    )
+    return ArenaEnvBuilder(arena_env, arena_env_builder_cfg_from_argparse(args)).make_registered()
 
 
 def run(args) -> int:
     import torch
-    from gymnasium.wrappers import RecordVideo
-
     output = Path(args.output).resolve()
     output.mkdir(parents=True, exist_ok=True)
     total = args.warmup + 8 * args.phase_steps + args.hold_steps
-    env = _build_env(args)
+    video_prefix = "g1_apple_" + datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+    env = _build_env(args, output, video_prefix, total)
     if env.unwrapped.num_envs != 1 or env.unwrapped.single_action_space.shape != (23,):
         raise RuntimeError("This baseline requires one G1 WBC/PINK environment with 23 actions")
-    env = RecordVideo(env, video_folder=str(output), name_prefix="g1_apple_pick",
-                      step_trigger=lambda step: step == 0, video_length=total,
-                      disable_logger=True)
     steps = []
     rest_height = None
     max_lift = 0.0
     near_hand_lift_steps = 0
     success = False
     failure = None
+    no_lift = False
     try:
         env.reset()
         previous = IDLE[2:5]
         grasp_reference = None
         for step in range(total):
             phase, alpha = phase_at_step(step, args.warmup, args.phase_steps)
-            apple, plate, apple_height, wrist_distance = _world_points(env)
+            apple, plate, apple_height, plate_height, wrist_distance, wrist_actual, pelvis_world = _world_points(env)
             if step == args.warmup:
                 rest_height = apple_height
                 grasp_reference = apple
+                if apple_height < 0.55 or plate_height < 0.55:
+                    failure = "fruit_or_plate_not_supported_on_table"
+                    no_lift = True
+                elif pelvis_world[2] < 0.45 or math.dist(pelvis_world[:2], (-0.4, 0.0)) > 0.25:
+                    failure = "robot_unstable_during_settle"
+                    no_lift = True
             if rest_height is not None:
                 max_lift = max(max_lift, apple_height - rest_height)
                 if (phase in ("lift", "transfer") and
                         apple_height - rest_height >= args.min_lift and wrist_distance < 0.20):
                     near_hand_lift_steps += 1
-            if phase == "transfer" and alpha <= 1 / args.phase_steps and near_hand_lift_steps < 5:
+            if not no_lift and phase == "transfer" and alpha <= 1 / args.phase_steps and near_hand_lift_steps < 5:
                 failure = "no_sustained_apple_lift_near_hand"
-                break
+                no_lift = True
+            if no_lift:
+                phase = "hold"
             planned_apple = apple if phase in ("settle", "pregrasp", "approach") else grasp_reference
             target = wrist_target(phase, planned_apple, plate,
                                   args.grasp_offset_x, args.grasp_offset_y, args.grasp_offset_z)
@@ -195,24 +232,38 @@ def run(args) -> int:
             if task_success:
                 success = True
             steps.append({"step": step, "phase": phase, "apple_z_m": apple_height,
+                          "plate_z_m": plate_height,
                           "apple_to_left_wrist_m": wrist_distance,
+                          "apple_pelvis_m": list(apple),
+                          "pelvis_world_m": list(pelvis_world),
+                          "left_wrist_actual_pelvis_m": list(wrist_actual),
                           "left_wrist_target_pelvis_m": list(command), "success": task_success})
             if bool(terminated[0]) or bool(truncated[0]):
                 if not success:
-                    failure = "episode_terminated_without_success"
+                    failure = failure or "episode_terminated_without_success"
                 break
     finally:
-        env.close()  # flushes MP4 even when the episode terminates early
+        env.close()  # flushes native Isaac Lab recorders
 
     result = {
         "arena_version": "0.3.0", "simulator": "Isaac Sim 6.1",
         "seed": args.seed, "steps": len(steps), "apple": APPLE_NAME,
+        "table_top_z_m": TABLE_CENTER[2] + 0.02,
+        "apple_z_after_settle_m": rest_height,
+        "plate_z_after_settle_m": steps[args.warmup]["plate_z_m"] if len(steps) > args.warmup else None,
+        "pelvis_world_after_settle_m": steps[args.warmup]["pelvis_world_m"] if len(steps) > args.warmup else None,
         "max_lift_m": round(max_lift, 4),
+        "pelvis_xy_drift_m": round(math.dist(steps[0]["pelvis_world_m"][:2], steps[-1]["pelvis_world_m"][:2]), 4) if steps else None,
         "sustained_lift_near_hand": near_hand_lift_steps >= 5,
         "near_hand_lift_steps": near_hand_lift_steps,
         "success_termination": success, "failure": failure,
         "success_with_lift_candidate": success and near_hand_lift_steps >= 5,
-        "video_files": [str(p) for p in output.glob("*.mp4")],
+        "video_files": [str(p) for p in output.glob(f"{video_prefix}*.mp4")],
+        "min_hand_distance_m": round(min(x["apple_to_left_wrist_m"] for x in steps), 4) if steps else None,
+        "phase_min_hand_distance_m": {
+            phase: round(min(x["apple_to_left_wrist_m"] for x in steps if x["phase"] == phase), 4)
+            for phase in dict.fromkeys(x["phase"] for x in steps)
+        },
         "action_type": "G1 WBC/PINK hand and wrist commands",
         "object_pose_overridden_during_rollout": False,
     }
@@ -224,6 +275,8 @@ def run(args) -> int:
 
 def main() -> int:
     parser = get_isaaclab_arena_cli_parser()
+    if "--headless" not in parser._option_string_actions:
+        parser.add_argument("--headless", action="store_true", help="Run with offscreen rendering")
     parser.add_argument("--output", default="outputs/arena_apple_pick")
     parser.add_argument("--warmup", type=int, default=100)
     parser.add_argument("--phase-steps", type=int, default=45)
