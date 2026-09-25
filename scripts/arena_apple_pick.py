@@ -101,9 +101,11 @@ def _world_points(env):
 def _build_env(args, output: Path, video_prefix: str, total_steps: int):
     import isaaclab.sim as sim_utils
     from isaaclab.envs.utils.video_recorder_cfg import VideoRecorderCfg
+    from isaaclab.sensors import CameraCfg
+    from isaaclab.utils.configclass import configclass
     from isaaclab_visualizers.kit import KitVisualizerCfg
     from isaaclab_arena.assets.registries import AssetRegistry
-    from isaaclab_arena.embodiments.g1.g1 import G1WBCPinkEmbodiment
+    from isaaclab_arena.embodiments.g1.g1 import G1CameraCfg, G1WBCPinkEmbodiment
     from isaaclab_arena.environments.arena_env_builder import ArenaEnvBuilder
     from isaaclab_arena.environments.isaaclab_arena_environment import IsaacLabArenaEnvironment
     from isaaclab_arena.environments.isaaclab_arena_manager_based_env_cfg import set_control_rate_50hz
@@ -125,7 +127,29 @@ def _build_env(args, output: Path, video_prefix: str, total_steps: int):
     plate = registry.get_asset_by_name(PLATE_NAME)()
     apple.set_initial_pose(Pose(position_xyz=APPLE_START, rotation_xyzw=(0, 0, 0, 1)))
     plate.set_initial_pose(Pose(position_xyz=PLATE_START, rotation_xyzw=(0, 0, 0, 1)))
+    # These offsets are provisional until the simulation frames have been
+    # compared with the two physical back-of-wrist camera views.
+    @configclass
+    class TrialCameraCfg(G1CameraCfg):
+        robot_left_wrist_cam: CameraCfg = CameraCfg(
+            prim_path="{ENV_REGEX_NS}/Robot/left_wrist_yaw_link/RobotLeftWristCam",
+            update_period=0.0, height=480, width=640, data_types=["rgb"],
+            spawn=sim_utils.PinholeCameraCfg(focal_length=15, clipping_range=(0.04, 5)),
+            offset=CameraCfg.OffsetCfg(
+                pos=(0.025, 0.040, 0.015), rot=(0.0, 0.0, 0.0, 1.0), convention="ros"
+            ),
+        )
+        robot_right_wrist_cam: CameraCfg = CameraCfg(
+            prim_path="{ENV_REGEX_NS}/Robot/right_wrist_yaw_link/RobotRightWristCam",
+            update_period=0.0, height=480, width=640, data_types=["rgb"],
+            spawn=sim_utils.PinholeCameraCfg(focal_length=15, clipping_range=(0.04, 5)),
+            offset=CameraCfg.OffsetCfg(
+                pos=(0.025, -0.040, 0.015), rot=(0.0, 0.0, 0.0, 1.0), convention="ros"
+            ),
+        )
+
     robot = G1WBCPinkEmbodiment(enable_cameras=True)
+    robot.camera_config = TrialCameraCfg()
     # Arena's G1 root is at pelvis height. Start above the z=0 ground plane.
     robot.set_initial_pose(Pose(position_xyz=ROBOT_START, rotation_xyzw=(0, 0, 0, 1)))
     robot.set_finger_contact_friction(
@@ -151,6 +175,8 @@ def _build_env(args, output: Path, video_prefix: str, total_steps: int):
     )
     def configure(env_cfg):
         env_cfg = set_control_rate_50hz(env_cfg)
+        # These are inspection videos: one frame per two 50-Hz control steps.
+        # Contract data must be sampled independently at an actual 30 Hz.
         env_cfg.sim.visualizer_cfgs = [
             KitVisualizerCfg(headless=True, eye=(-1.4, -1.2, 1.6), lookat=(0.05, 0.2, 0.4))
         ]
@@ -158,12 +184,22 @@ def _build_env(args, output: Path, video_prefix: str, total_steps: int):
             VideoRecorderCfg(
                 source="visualizer:kit", output_dir=str(output),
                 output_filename_prefix=f"{video_prefix}_overview",
-                video_length=total_steps, fps=30, frame_stride=2,
+                video_length=total_steps, fps=25, frame_stride=2,
             ),
             VideoRecorderCfg(
                 source="sensor:robot_head_cam", output_dir=str(output),
                 output_filename_prefix=f"{video_prefix}_head",
-                video_length=total_steps, fps=30, frame_stride=2,
+                video_length=total_steps, fps=25, frame_stride=2,
+            ),
+            VideoRecorderCfg(
+                source="sensor:robot_left_wrist_cam", output_dir=str(output),
+                output_filename_prefix=f"{video_prefix}_left_wrist",
+                video_length=total_steps, fps=25, frame_stride=2,
+            ),
+            VideoRecorderCfg(
+                source="sensor:robot_right_wrist_cam", output_dir=str(output),
+                output_filename_prefix=f"{video_prefix}_right_wrist",
+                video_length=total_steps, fps=25, frame_stride=2,
             ),
         ]
         return env_cfg
