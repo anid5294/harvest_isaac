@@ -26,7 +26,13 @@ unset CONDA_PKGS_DIRS
 # Never guess a developer's environment name. Use an explicit override, or
 # preserve the non-base Conda environment that the developer already activated.
 if [ -n "${VLA_ISAACLAB_ENV:-}" ]; then
-    conda activate "$VLA_ISAACLAB_ENV" || return 1
+    # A prefix environment can already be active even when it is no longer
+    # discoverable by name after CONDA_ENVS_PATH is cleared. Preserve that
+    # environment instead of asking Conda to resolve its name a second time.
+    if [ "${CONDA_DEFAULT_ENV:-}" != "$VLA_ISAACLAB_ENV" ] \
+        && [ "${CONDA_PREFIX:-}" != "$VLA_ISAACLAB_ENV" ]; then
+        conda activate "$VLA_ISAACLAB_ENV" || return 1
+    fi
 elif [ -n "${CONDA_DEFAULT_ENV:-}" ] && [ "$CONDA_DEFAULT_ENV" != "base" ]; then
     export VLA_ISAACLAB_ENV="$CONDA_DEFAULT_ENV"
 else
@@ -66,7 +72,9 @@ check_install_environment() {
     python_path="$(command -v python)"
     pip_path="$(command -v pip)"
 
-    if [ -z "${CONDA_PREFIX:-}" ] || [ "${CONDA_DEFAULT_ENV:-}" != "$VLA_ISAACLAB_ENV" ]; then
+    if [ -z "${CONDA_PREFIX:-}" ] \
+        || { [ "${CONDA_DEFAULT_ENV:-}" != "$VLA_ISAACLAB_ENV" ] \
+            && [ "$CONDA_PREFIX" != "$VLA_ISAACLAB_ENV" ]; }; then
         echo "[vla_isaaclab] Expected Conda environment '$VLA_ISAACLAB_ENV', got '${CONDA_DEFAULT_ENV:-none}'." >&2
         return 1
     fi
