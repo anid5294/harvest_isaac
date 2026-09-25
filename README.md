@@ -289,7 +289,7 @@ or object store rather than committing them.
 ## Isaac Lab Arena apple grasp trial
 
 `scripts/arena_apple_pick.py` runs with Arena 0.3.0 and Isaac Sim 6.1.0. It
-builds a G1, white collision tabletop, ground, apple, and plate; commands
+builds a G1, lit white collision tabletop, ground, apple, and plate; commands
 the left arm and hand, and saves headless overview and robot-camera MP4s,
 `result.json`, and `trajectory.jsonl`. It uses Arena's Objaverse apple. This 23-D WBC/PINK trial
 does not yet emit the project's 43-D contract.
