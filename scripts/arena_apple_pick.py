@@ -28,10 +28,10 @@ IDLE = (
 )
 APPLE_NAME = "apple_01_objaverse_robolab"
 PLATE_NAME = "clay_plates_hot3d_robolab"
-TABLE_CENTER = (0.25, 0.20, 0.60)  # 0.04-m thick top; upper surface z=0.62 m
+TABLE_CENTER = (0.25, 0.20, 0.70)  # 0.04-m thick top; upper surface z=0.72 m
 ROBOT_START = (-0.3, 0.0, 0.78)
-APPLE_START = (-0.05, 0.10, 0.68)
-PLATE_START = (0.0, 0.40, 0.64)
+APPLE_START = (-0.05, 0.10, 0.78)
+PLATE_START = (0.0, 0.40, 0.74)
 
 
 def phase_at_step(step: int, warmup: int, phase_steps: int) -> tuple[str, float]:
