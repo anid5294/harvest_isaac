@@ -4,6 +4,12 @@ Read this file before editing or running the simulator.
 
 ## Environment
 
+- The current orchard apple trial uses the developer-owned Isaac Lab Arena 0.3.0
+  checkout and its Isaac Sim 6.1 environment. Run it from that checkout with
+  its `.venv/bin/python`; see the Arena section of `README.md`. Do not alter the
+  Arena checkout when changing this repository.
+- The Conda and Isaac Lab v2.0.2 instructions below apply to the older
+  manager-based environments in this repository, not to the Arena trial.
 - Activate a developer-owned Conda environment first, or set `VLA_ISAACLAB_ENV`.
 - Shared Isaac Lab: `${ISAACLAB_ROOT:-/media/data-ssd/software/IsaacLab-v2.0.2}`.
 - Required Isaac Lab tag: `v2.0.2`; Isaac Sim: 4.5.0.0.
