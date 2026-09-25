@@ -29,7 +29,8 @@ IDLE = (
 APPLE_NAME = "apple_01_objaverse_robolab"
 PLATE_NAME = "clay_plates_hot3d_robolab"
 TABLE_CENTER = (0.25, 0.20, 0.60)  # 0.04-m thick top; upper surface z=0.62 m
-APPLE_START = (0.0, 0.10, 0.68)
+ROBOT_START = (-0.3, 0.0, 0.78)
+APPLE_START = (-0.05, 0.10, 0.68)
 PLATE_START = (0.0, 0.40, 0.64)
 
 
@@ -126,7 +127,7 @@ def _build_env(args, output: Path, video_prefix: str, total_steps: int):
     plate.set_initial_pose(Pose(position_xyz=PLATE_START, rotation_xyzw=(0, 0, 0, 1)))
     robot = G1WBCPinkEmbodiment(enable_cameras=True)
     # Arena's G1 root is at pelvis height. Start above the z=0 ground plane.
-    robot.set_initial_pose(Pose(position_xyz=(-0.4, 0, 0.78), rotation_xyzw=(0, 0, 0, 1)))
+    robot.set_initial_pose(Pose(position_xyz=ROBOT_START, rotation_xyzw=(0, 0, 0, 1)))
     robot.set_finger_contact_friction(
         material_path="/World/Materials/g1_apple_fingers",
         static_friction=2.0,
@@ -197,15 +198,19 @@ def run(args) -> int:
         for step in range(total):
             phase, alpha = phase_at_step(step, args.warmup, args.phase_steps)
             apple, plate, apple_height, plate_height, wrist_distance, wrist_actual, pelvis_world = _world_points(env)
+            tracking_error = math.dist(wrist_actual, previous)
             if step == args.warmup:
                 rest_height = apple_height
                 grasp_reference = apple
                 if apple_height < 0.55 or plate_height < 0.55:
                     failure = "fruit_or_plate_not_supported_on_table"
                     no_lift = True
-                elif pelvis_world[2] < 0.45 or math.dist(pelvis_world[:2], (-0.4, 0.0)) > 0.25:
+                elif pelvis_world[2] < 0.45 or math.dist(pelvis_world[:2], ROBOT_START[:2]) > 0.25:
                     failure = "robot_unstable_during_settle"
                     no_lift = True
+            if not no_lift and phase == "close" and alpha <= 1 / args.phase_steps and tracking_error > 0.08:
+                failure = "wrist_did_not_reach_apple"
+                no_lift = True
             if rest_height is not None:
                 max_lift = max(max_lift, apple_height - rest_height)
                 if (phase in ("lift", "transfer") and
@@ -239,6 +244,7 @@ def run(args) -> int:
                           "apple_pelvis_m": list(apple),
                           "pelvis_world_m": list(pelvis_world),
                           "left_wrist_actual_pelvis_m": list(wrist_actual),
+                          "wrist_command_error_m": tracking_error,
                           "left_wrist_target_pelvis_m": list(command), "success": task_success})
             if bool(terminated[0]) or bool(truncated[0]):
                 if not success:
@@ -262,6 +268,9 @@ def run(args) -> int:
         "success_with_lift_candidate": success and near_hand_lift_steps >= 5,
         "video_files": [str(p) for p in output.glob(f"{video_prefix}*.mp4")],
         "min_hand_distance_m": round(min(x["apple_to_left_wrist_m"] for x in steps), 4) if steps else None,
+        "approach_end_wrist_error_m": next(
+            (round(x["wrist_command_error_m"], 4) for x in reversed(steps) if x["phase"] == "approach"), None
+        ),
         "phase_min_hand_distance_m": {
             phase: round(min(x["apple_to_left_wrist_m"] for x in steps if x["phase"] == phase), 4)
             for phase in dict.fromkeys(x["phase"] for x in steps)
