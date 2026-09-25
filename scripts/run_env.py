@@ -46,16 +46,23 @@ def parse_args():
 
 
 ARGS = parse_args()
-ARGS.experience = str(
-    PROJECT_ROOT
-    / "configs"
-    / (
-        "ycb.python.headless.kit"
+isaaclab_root = Path(os.environ["ISAACLAB_ROOT"]).resolve()
+if not ARGS.experience:
+    experience_name = (
+        "isaaclab.python.headless.kit"
         if ARGS.physics_only
-        else ("ycb.python.headless.rendering.kit" if ARGS.headless else "ycb.python.rendering.kit")
+        else (
+            "isaaclab.python.headless.rendering.kit"
+            if ARGS.headless
+            else "isaaclab.python.rendering.kit"
+        )
     )
-)
-ARGS.kit_args = f"--portable-root {PROJECT_ROOT}/outputs/runtime/kit"
+    ARGS.experience = str(isaaclab_root / "apps" / experience_name)
+
+runtime_profile = "physics" if ARGS.physics_only else "rendering"
+portable_root = PROJECT_ROOT / "outputs/runtime/kit" / runtime_profile
+if "--portable-root" not in ARGS.kit_args:
+    ARGS.kit_args = f"{ARGS.kit_args} --portable-root {portable_root}".strip()
 APP = AppLauncher(ARGS).app
 
 import gymnasium as gym
