@@ -304,6 +304,6 @@ uv run --no-sync python \
   --output /home/vlakbnn/anikad/harvest_isaac/outputs/arena_apple_pick
 ```
 
-Use `result.json` as the outcome. It distinguishes an apple lift near the hand
-from the named placement-success termination. Video alone does not prove a
-successful grasp. The trial still needs calibration on the lab workstation.
+Use `result.json` as the outcome. `verified_pick_and_place` requires a lift near
+the hand and sustained plate contact after release and retreat. Review the video
+to confirm the visible grasp; the trial still needs multi-seed validation.

@@ -145,7 +145,8 @@ def _build_env(args, output: Path, video_prefix: str, total_steps: int):
     task = PickAndPlaceTask(
         apple, plate, table, episode_length_s=20.0,
         task_description="Pick up the apple from the table and place it on the plate.",
-        force_threshold=0.1, velocity_threshold=0.1,
+        force_threshold=0.1, velocity_threshold=0.03,
+        placement_consecutive_steps=90,
         mimic_env_cfg_factory=mimic_cfg,
     )
     def configure(env_cfg):
@@ -189,6 +190,8 @@ def run(args) -> int:
     max_lift = 0.0
     near_hand_lift_steps = 0
     success = False
+    success_step = None
+    success_phase = None
     failure = None
     no_lift = False
     try:
@@ -238,6 +241,8 @@ def run(args) -> int:
             task_success = bool(env.unwrapped.termination_manager.get_term("success")[0])
             if task_success:
                 success = True
+                success_step = step
+                success_phase = phase
             steps.append({"step": step, "phase": phase, "apple_z_m": apple_height,
                           "plate_z_m": plate_height,
                           "apple_to_left_wrist_m": wrist_distance,
@@ -253,6 +258,10 @@ def run(args) -> int:
     finally:
         env.close()  # flushes native Isaac Lab recorders
 
+    success_with_lift = success and near_hand_lift_steps >= 5
+    verified_pick_and_place = success_with_lift and success_phase in ("retreat", "hold")
+    if not verified_pick_and_place and failure is None:
+        failure = "no_verified_post_release_placement"
     result = {
         "arena_version": "0.3.0", "simulator": "Isaac Sim 6.1",
         "seed": args.seed, "steps": len(steps), "apple": APPLE_NAME,
@@ -264,8 +273,10 @@ def run(args) -> int:
         "pelvis_xy_drift_m": round(math.dist(steps[0]["pelvis_world_m"][:2], steps[-1]["pelvis_world_m"][:2]), 4) if steps else None,
         "sustained_lift_near_hand": near_hand_lift_steps >= 5,
         "near_hand_lift_steps": near_hand_lift_steps,
-        "success_termination": success, "failure": failure,
-        "success_with_lift_candidate": success and near_hand_lift_steps >= 5,
+        "success_termination": success, "success_step": success_step,
+        "success_phase": success_phase, "failure": failure,
+        "success_with_lift_candidate": success_with_lift,
+        "verified_pick_and_place": verified_pick_and_place,
         "video_files": [str(p) for p in output.glob(f"{video_prefix}*.mp4")],
         "min_hand_distance_m": round(min(x["apple_to_left_wrist_m"] for x in steps), 4) if steps else None,
         "approach_end_wrist_error_m": next(
@@ -281,7 +292,7 @@ def run(args) -> int:
     (output / "result.json").write_text(json.dumps(result, indent=2) + "\n")
     (output / "trajectory.jsonl").write_text("".join(json.dumps(row) + "\n" for row in steps))
     print(json.dumps(result, indent=2))
-    return 0 if result["success_with_lift_candidate"] else 2
+    return 0 if verified_pick_and_place else 2
 
 
 def main() -> int:
@@ -291,7 +302,7 @@ def main() -> int:
     parser.add_argument("--output", default="outputs/arena_apple_pick")
     parser.add_argument("--warmup", type=int, default=100)
     parser.add_argument("--phase-steps", type=int, default=45)
-    parser.add_argument("--hold-steps", type=int, default=20)
+    parser.add_argument("--hold-steps", type=int, default=60)
     parser.add_argument("--grasp-offset-x", type=float, default=-0.10)
     parser.add_argument("--grasp-offset-y", type=float, default=0.0)
     parser.add_argument("--grasp-offset-z", type=float, default=0.015)
