@@ -112,6 +112,7 @@ def _build_env(args, output: Path, video_prefix: str, total_steps: int):
 
     registry = AssetRegistry()
     ground = registry.get_asset_by_name("ground_plane")()
+    light = registry.get_asset_by_name("light")()
     table = registry.get_asset_by_name("procedural_table")()
     table.set_initial_pose(Pose(position_xyz=TABLE_CENTER, rotation_xyzw=(0, 0, 0, 1)))
     table.object_cfg.spawn = table.object_cfg.spawn.copy()
@@ -124,7 +125,8 @@ def _build_env(args, output: Path, video_prefix: str, total_steps: int):
     apple.set_initial_pose(Pose(position_xyz=APPLE_START, rotation_xyzw=(0, 0, 0, 1)))
     plate.set_initial_pose(Pose(position_xyz=PLATE_START, rotation_xyzw=(0, 0, 0, 1)))
     robot = G1WBCPinkEmbodiment(enable_cameras=True)
-    robot.set_initial_pose(Pose(position_xyz=(-0.4, 0, 0), rotation_xyzw=(0, 0, 0, 1)))
+    # Arena's G1 root is at pelvis height. Start above the z=0 ground plane.
+    robot.set_initial_pose(Pose(position_xyz=(-0.4, 0, 0.78), rotation_xyzw=(0, 0, 0, 1)))
     robot.set_finger_contact_friction(
         material_path="/World/Materials/g1_apple_fingers",
         static_friction=2.0,
@@ -166,7 +168,7 @@ def _build_env(args, output: Path, video_prefix: str, total_steps: int):
 
     arena_env = IsaacLabArenaEnvironment(
         name="g1_table_apple_grasp_trial", embodiment=robot,
-        scene=Scene(assets=[ground, table, apple, plate]), task=task,
+        scene=Scene(assets=[ground, light, table, apple, plate]), task=task,
         env_cfg_callback=configure,
     )
     return ArenaEnvBuilder(arena_env, arena_env_builder_cfg_from_argparse(args)).make_registered()
