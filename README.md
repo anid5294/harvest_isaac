@@ -285,3 +285,24 @@ Replay normalized actions with:
 
 `outputs/` is ignored by Git. Publish validated datasets to a dataset registry
 or object store rather than committing them.
+
+## Isaac Lab Arena apple grasp trial
+
+`scripts/arena_apple_pick.py` runs with Arena 0.3.0 and Isaac Sim 6.1.0. It
+builds a G1, table, apple, and plate; commands the left arm and hand; and saves
+a headless MP4, `result.json`, and `trajectory.jsonl`. It uses Arena's Objaverse
+apple. This 23-D WBC/PINK trial does not yet emit the project's 43-D contract.
+
+Run from an installed Arena checkout:
+
+```bash
+cd /home/vlakbnn/anikad/deps/IsaacLab-Arena-native
+uv run --no-sync python \
+  /home/vlakbnn/anikad/harvest_isaac/scripts/arena_apple_pick.py \
+  --headless --num_envs 1 --presets physx \
+  --output /home/vlakbnn/anikad/harvest_isaac/outputs/arena_apple_pick
+```
+
+Use `result.json` as the outcome. It distinguishes an apple lift near the hand
+from the named placement-success termination. Video alone does not prove a
+successful grasp. The trial still needs calibration on the lab workstation.
