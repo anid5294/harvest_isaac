@@ -160,6 +160,7 @@ Importing `vla_isaaclab` registers these IDs with Gymnasium:
 - `VLA-ScenePreview-YCB-G1-v0`
 - `VLA-ScenePreview-Dinnerware-G1-v0`
 - `VLA-ScenePreview-Microwave-G1-v0`
+- `VLA-ScenePreview-Orchard-G1-v0`
 - `VLA-YCBSugarBox-G1-JointPos-v0`
 
 To add a task, create a complete EnvCfg under `src/vla_isaaclab/envs/`, keep its
@@ -176,7 +177,7 @@ tasks.
 
 ## Scene preview examples
 
-Use one command and choose one of three task IDs:
+Use one command and choose a preview task ID:
 
 ```bash
 ./scripts/run_env.sh --headless \
@@ -189,6 +190,13 @@ Use one command and choose one of three task IDs:
 | YCB objects | `VLA-ScenePreview-YCB-G1-v0` | `ycb` |
 | Bowl and plate | `VLA-ScenePreview-Dinnerware-G1-v0` | `dinnerware` |
 | Microwave | `VLA-ScenePreview-Microwave-G1-v0` | `microwave` |
+| Orchard integration | `VLA-ScenePreview-Orchard-G1-v0` | `orchard` |
+
+The orchard preview is the first integration gate: it places the contract G1,
+a supported collection tray, a collidable procedural trunk and branches, and a
+seeded set of visible apples in one scene. Its apples are scene markers. The
+harvest task will replace the designated front apple with a rigid fruit and a
+breakable stem joint before any pick or detachment result is labeled successful.
 
 ## Reference task: YCB sugar box
 

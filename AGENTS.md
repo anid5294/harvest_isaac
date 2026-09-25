@@ -62,7 +62,7 @@ modalities are owned by `envs/common/scene.py`.
 
 ## Reference behavior
 
-- Preview IDs: YCB, dinnerware, microwave; 240 control steps at 30 Hz.
+- Preview IDs: YCB, dinnerware, microwave, orchard; 240 control steps at 30 Hz.
 - Sugar-box ID: `VLA-YCBSugarBox-G1-JointPos-v0`.
 - Sugar-box table contains only `004_sugar_box`.
 - Validated success occurs at step 961 using physical contact and three fingers.
@@ -75,6 +75,8 @@ Useful commands:
 ./scripts/run_env.sh --headless --physics-only --list-tasks
 ./scripts/run_env.sh --headless --physics-only \
   --task VLA-ScenePreview-YCB-G1-v0 --steps 240
+./scripts/run_env.sh --headless --physics-only \
+  --task VLA-ScenePreview-Orchard-G1-v0 --steps 240
 ./scripts/run_env.sh --headless --physics-only \
   --task VLA-YCBSugarBox-G1-JointPos-v0 --steps 1200
 ```
