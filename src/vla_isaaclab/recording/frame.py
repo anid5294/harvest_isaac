@@ -17,6 +17,24 @@ from vla_isaaclab.envs.common.managers import ACTION_TERM_NAME
 
 
 POSE_NAMES = ("position.x", "position.y", "position.z", "quaternion.w", "quaternion.x", "quaternion.y", "quaternion.z")
+ORCHARD_THREE_VIEW_PROFILE = "orchard_fixed_front_top_three_view_v1"
+
+
+def camera_features_for_profile(profile):
+    if profile == ORCHARD_THREE_VIEW_PROFILE:
+        return (
+            ("cam_left_high", "observation.images.cam_left_high"),
+            ("cam_left_wrist", "observation.images.cam_left_wrist"),
+            ("cam_right_wrist", "observation.images.cam_right_wrist"),
+        )
+    return (
+        ("cam_side", "observation.images.cam_right_high" if profile == "legacy_orchard"
+         else "observation.images.cam_side"),
+        ("camera", "observation.images.cam_side"),
+        ("cam_left_high", "observation.images.cam_left_high"),
+        ("cam_left_wrist", "observation.images.cam_left_wrist"),
+        ("cam_right_wrist", "observation.images.cam_right_wrist"),
+    )
 
 
 @dataclass(frozen=True)
@@ -79,12 +97,14 @@ class EnvironmentFrameAdapter:
                 )
             )
 
-        camera_features = (
-            ("cam_side", "observation.images.cam_side"),
-            ("camera", "observation.images.cam_side"),
-            ("cam_left_high", "observation.images.cam_left_high"),
-            ("cam_left_wrist", "observation.images.cam_left_wrist"),
+        self.camera_profile = getattr(env.cfg, "camera_profile", None)
+        camera_features = camera_features_for_profile(
+            self.camera_profile or ("legacy_orchard" if hasattr(env.cfg, "orchard_layout") else None)
         )
+        if self.camera_profile == ORCHARD_THREE_VIEW_PROFILE:
+            missing = [name for name, _ in camera_features if name not in env.scene.sensors]
+            if missing:
+                raise RuntimeError(f"Orchard camera profile is missing required sensors: {missing}")
         self.cameras = [
             (sensor_name, feature_name, env.scene.sensors[sensor_name])
             for sensor_name, feature_name in camera_features
@@ -110,18 +130,21 @@ class EnvironmentFrameAdapter:
         parent_links = {
             "cam_left_high": "head_link",
             "cam_left_wrist": "left_hand_palm_link",
+            "cam_right_wrist": "right_hand_palm_link",
             "cam_side": "world",
             "camera": "world",
         }
         result = []
         for sensor_name, feature_name, camera in self.cameras:
             offset = camera.cfg.offset
-            result.append(
-                {
+            metadata = {
                     "sensor_name": sensor_name,
                     "feature_key": feature_name,
                     "identifier": f"isaac-sim:{sensor_name}",
-                    "parent_link": parent_links[sensor_name],
+                    "parent_link": (
+                        "world" if self.camera_profile == ORCHARD_THREE_VIEW_PROFILE
+                        and sensor_name == "cam_left_high" else parent_links[sensor_name]
+                    ),
                     "position_xyz_m": list(offset.pos),
                     "orientation_wxyz": list(offset.rot),
                     "orientation_convention": offset.convention,
@@ -137,7 +160,14 @@ class EnvironmentFrameAdapter:
                         "clipping_range_m": list(camera.cfg.spawn.clipping_range),
                     },
                 }
-            )
+            if self.camera_profile == ORCHARD_THREE_VIEW_PROFILE:
+                metadata["camera_profile"] = self.camera_profile
+                metadata["mount_role"] = (
+                    "fixed_external_front_top" if sensor_name == "cam_left_high"
+                    else "robot_wrist"
+                )
+                metadata["calibration"]["status"] = "provisional_sim_pose; verify framing on lab machine"
+            result.append(metadata)
         return result
 
     @property
