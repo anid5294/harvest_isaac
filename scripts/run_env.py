@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import datetime
+import hashlib
 import json
 import os
 import subprocess
@@ -16,15 +17,34 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
+
+def write_exit_status(code):
+    if os.environ.get("VLA_RUN_STATUS_FILE"):
+        Path(os.environ["VLA_RUN_STATUS_FILE"]).write_text(json.dumps({"exit_code": code}))
+
+
+# Registration is pure Python; listing tasks must not initialize a GPU renderer.
+if "--list-tasks" in sys.argv:
+    import gymnasium as gym
+    import vla_isaaclab
+    print(json.dumps(sorted(key for key in gym.registry if key.startswith("VLA-")), indent=2))
+    write_exit_status(0)
+    raise SystemExit(0)
+
 from isaaclab.app import AppLauncher
 
 
 def parse_args():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--task", default="VLA-ScenePreview-YCB-G1-v0", help="Registered Gym environment ID.")
-    parser.add_argument("--policy", choices=("auto", "standing", "sugar-box"), default="auto")
+    parser.add_argument("--policy", choices=("auto", "standing", "sugar-box", "orchard"), default="auto")
+    parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--report-dir", type=Path, help="Save this run's validation.json in a separate directory.")
     parser.add_argument("--steps", type=int, default=300, help="Control steps; 0 keeps a GUI run open.")
     parser.add_argument("--preview-video", type=Path)
+    parser.add_argument("--camera-videos", type=Path, help="New directory for profile-specific H.264 camera inspection videos.")
+    parser.add_argument("--orchard-tree-asset", type=Path,
+                        help="Prepared visual tree directory (tree.usda and manifest.json); active orchard only.")
     parser.add_argument("--record-format", choices=("none", "hdf5", "lerobot"), default="none")
     parser.add_argument(
         "--lerobot-version", choices=("3", "2.1"), default="3",
@@ -39,9 +59,15 @@ def parse_args():
     )
     parser.add_argument("--list-tasks", action="store_true")
     parser.add_argument("--physics-only", action="store_true")
+    parser.add_argument("--render-profile", choices=("sensor", "stock"), default="sensor")
+    parser.add_argument("--render-smoke", action="store_true", help="Render a lit cube before loading any robot/task.")
+    parser.add_argument("--grasp-offset", type=float, nargs=3, metavar=("X", "Y", "Z"),
+                        help="Orchard palm offset from apple center in world axes (meters).")
     AppLauncher.add_app_launcher_args(parser)
     args = parser.parse_args()
     args.enable_cameras = not args.physics_only
+    if args.render_smoke and args.physics_only:
+        parser.error("--render-smoke requires rendering")
     return args
 
 
@@ -58,12 +84,14 @@ if not ARGS.experience:
         )
     )
     ARGS.experience = str(isaaclab_root / "apps" / experience_name)
+    if ARGS.headless and not ARGS.physics_only and ARGS.render_profile == "sensor":
+        ARGS.experience = str(PROJECT_ROOT / "configs/orchard.sensor.kit")
 
-runtime_profile = "physics" if ARGS.physics_only else "rendering"
+runtime_profile = "physics" if ARGS.physics_only else f"rendering-{ARGS.render_profile}"
 portable_root = PROJECT_ROOT / "outputs/runtime/kit" / runtime_profile
 if "--portable-root" not in ARGS.kit_args:
     ARGS.kit_args = f"{ARGS.kit_args} --portable-root {portable_root}".strip()
-APP = AppLauncher(ARGS).app
+APP = AppLauncher(ARGS, fast_shutdown=False, multi_gpu=False).app
 
 import gymnasium as gym
 import numpy as np
@@ -71,7 +99,6 @@ import torch
 
 import vla_isaaclab  # noqa: F401  Register environments.
 from isaaclab.managers import DatasetExportMode
-from isaaclab_tasks.utils import parse_env_cfg
 
 from vla_isaaclab.envs.common import LOWER_BODY_JOINT_NAMES, SUPPORT_HEIGHT
 from vla_isaaclab.envs.common.managers import ACTION_TERM_NAME
@@ -88,7 +115,11 @@ def registered_tasks():
 def make_policy(env):
     selected = ARGS.policy
     if selected == "auto":
-        selected = "sugar-box" if ARGS.task == "VLA-YCBSugarBox-G1-JointPos-v0" else "standing"
+        selected = {"VLA-YCBSugarBox-G1-JointPos-v0": "sugar-box",
+                    "VLA-OrchardPick-G1-JointPos-v0": "orchard"}.get(ARGS.task, "standing")
+    if selected == "orchard":
+        from vla_isaaclab.policies.orchard_pick import OrchardScriptedPolicy
+        return OrchardScriptedPolicy(env)
     return YCBSugarBoxScriptedPolicy(env) if selected == "sugar-box" else StandingPolicy(env)
 
 
@@ -99,17 +130,28 @@ def task_succeeded(env) -> bool:
 
 
 def project_revision() -> dict:
-    commit = subprocess.run(
-        ["git", "rev-parse", "HEAD"], cwd=PROJECT_ROOT, check=True,
+    revision = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=PROJECT_ROOT, check=False,
         capture_output=True, text=True,
-    ).stdout.strip()
+    )
+    # rsync-based lab tests may intentionally omit .git. Pin the actual Python
+    # source bytes as well, including uncommitted/new files in normal checkouts.
+    digest = hashlib.sha256()
+    for folder in ("scripts", "src"):
+        for path in sorted((PROJECT_ROOT / folder).rglob("*.py")):
+            digest.update(str(path.relative_to(PROJECT_ROOT)).encode())
+            digest.update(b"\0")
+            digest.update(path.read_bytes())
+    if revision.returncode:
+        return {"git_commit": None, "working_tree_dirty": None, "python_source_sha256": digest.hexdigest()}
+    commit = revision.stdout.strip()
     dirty = bool(
         subprocess.run(
             ["git", "status", "--porcelain"], cwd=PROJECT_ROOT, check=True,
             capture_output=True, text=True,
         ).stdout.strip()
     )
-    return {"git_commit": commit, "working_tree_dirty": dirty}
+    return {"git_commit": commit, "working_tree_dirty": dirty, "python_source_sha256": digest.hexdigest()}
 
 
 def primary_camera(env):
@@ -200,7 +242,16 @@ def validate(env, policy, steps, success_count, dataset_path=None):
     }
     if hasattr(policy, "diagnostics"):
         report["policy"] = policy.diagnostics()
-    if ARGS.task == "VLA-YCBSugarBox-G1-JointPos-v0":
+    if hasattr(env.cfg, "orchard_layout"):
+        report["orchard"] = {
+            "layout": env.cfg.orchard_layout.metadata(),
+            "metrics": getattr(env, "orchard_last_metrics", {}),
+            "fixed_base": True,
+            "camera_videos": str(ARGS.camera_videos) if ARGS.camera_videos else None,
+            "camera_profile": env.cfg.camera_profile,
+            "tree_asset": getattr(env.cfg, "tree_asset_metadata", None),
+        }
+    if "success" in env.termination_manager.active_terms:
         report["passed"] = bool(
             report["passed"] and success_count > 0 and not report.get("policy", {}).get("failed", False)
         )
@@ -208,6 +259,9 @@ def validate(env, policy, steps, success_count, dataset_path=None):
 
 
 def main() -> int:
+    if ARGS.render_smoke:
+        from render_smoke import render_smoke
+        return render_smoke(ARGS.report_dir or PROJECT_ROOT / "outputs/render_smoke", ARGS.device)
     if ARGS.list_tasks:
         tasks = registered_tasks()
         if not tasks:
@@ -216,8 +270,10 @@ def main() -> int:
         return 0
     if ARGS.task not in registered_tasks():
         raise ValueError(f"Unknown VLA environment {ARGS.task!r}. Available: {registered_tasks()}")
-    if ARGS.preview_video and ARGS.physics_only:
-        raise ValueError("--preview-video requires rendering; remove --physics-only")
+    if ARGS.orchard_tree_asset and ARGS.task != "VLA-OrchardPick-G1-JointPos-v0":
+        raise ValueError("--orchard-tree-asset requires the active orchard-pick task")
+    if (ARGS.preview_video or ARGS.camera_videos) and ARGS.physics_only:
+        raise ValueError("Video output requires rendering; remove --physics-only")
     if ARGS.record_format != "none" and ARGS.physics_only:
         raise ValueError("recording requires cameras; remove --physics-only")
     if ARGS.episodes < 1:
@@ -225,7 +281,33 @@ def main() -> int:
     if ARGS.record_format != "lerobot" and ARGS.episodes != 1:
         raise ValueError("multiple episodes currently require --record-format lerobot")
 
-    cfg = parse_env_cfg(ARGS.task, device=ARGS.device, num_envs=1)
+    # Avoid importing the optional training task stack (isaaclab_rl/gym) for a
+    # locally registered environment. Resolve its documented config entry point.
+    import importlib
+    module_name, config_name = gym.spec(ARGS.task).kwargs["env_cfg_entry_point"].split(":")
+    cfg = getattr(importlib.import_module(module_name), config_name)()
+    cfg.sim.device = ARGS.device
+    cfg.scene.num_envs = 1
+    cfg.seed = ARGS.seed
+    if ARGS.task == "VLA-OrchardPick-G1-JointPos-v0":
+        if ARGS.episodes != 1:
+            raise ValueError("Run one orchard seed per process; stem resets and batch collection need lab validation")
+        cfg.configure_layout(ARGS.seed)
+        if ARGS.orchard_tree_asset:
+            from isaaclab.assets import AssetBaseCfg
+            import isaaclab.sim as sim_utils
+            from vla_isaaclab.envs.orchard_pick.tree_asset import validate_tree_asset
+            tree_path, tree_manifest = validate_tree_asset(ARGS.orchard_tree_asset, cfg.orchard_layout)
+            cfg.scene.foliage = None
+            cfg.scene.tree_visual = AssetBaseCfg(
+                prim_path="{ENV_REGEX_NS}/TreeVisual",
+                spawn=sim_utils.UsdFileCfg(usd_path=str(tree_path)),
+            )
+            cfg.tree_asset_metadata = tree_manifest
+        if ARGS.grasp_offset is not None:
+            if not all(np.isfinite(ARGS.grasp_offset)):
+                raise ValueError("Grasp offset must be finite")
+            cfg.grasp_offset = tuple(ARGS.grasp_offset)
     finite_steps = ARGS.steps if ARGS.steps > 0 else 1800
     episode_steps = finite_steps if ARGS.record_format == "hdf5" else finite_steps + 1
     cfg.episode_length_s = episode_steps * cfg.decimation * cfg.sim.dt
@@ -247,8 +329,12 @@ def main() -> int:
     env = gym.make(ARGS.task, cfg=cfg).unwrapped
     video_container = None
     video_stream = None
+    camera_videos = None
     try:
-        env.reset(seed=42)
+        env.reset(seed=ARGS.seed)
+        if ARGS.camera_videos:
+            from preview_views import PreviewViews
+            camera_videos = PreviewViews(env, ARGS.camera_videos)
         if ARGS.record_format == "hdf5":
             env.recorder_manager._dataset_file_handler.add_env_args(
                 {
@@ -278,6 +364,7 @@ def main() -> int:
             adapter = EnvironmentFrameAdapter(env)
             task_prompt = ARGS.task_prompt or cfg.task_instruction
             is_sugar = ARGS.task == "VLA-YCBSugarBox-G1-JointPos-v0"
+            is_orchard = ARGS.task == "VLA-OrchardPick-G1-JointPos-v0"
             collection = {
                 "contract_version": "1.0",
                 "dataset_profile": "g1_29body_dex3_43d_v1",
@@ -341,6 +428,30 @@ def main() -> int:
                     "observation.images.cam_right_wrist intentionally omitted per user direction on 2026-09-22"
                 ],
             }
+            if is_orchard:
+                collection.update({
+                    "orchard_layout": cfg.orchard_layout.metadata(),
+                    "camera_profile": cfg.camera_profile,
+                    "camera_semantics": "cam_left_high is fixed world front/top, not the legacy head-mounted view",
+                    "tree_asset": getattr(cfg, "tree_asset_metadata", None),
+                    "contract_exceptions": [],
+                    "task_success_criteria": (
+                        "Native stem break after pull; sustained lift; physical basket floor contact; "
+                        "open hand >18 cm away; whole fruit inside basket, speed <0.035 m/s for 30 steps; "
+                        "no non-target detachment or task failure"
+                    ),
+                    "held_and_moving_groups": {
+                        "held": ["legs", "waist roll/pitch", "right arm", "right hand"],
+                        "moving": ["waist yaw", "left arm", "left hand"],
+                    },
+                })
+                collection["controllers"]["arms_and_hands"] = "scripted orchard phases with existing bounded-DLS IK"
+                collection["controllers"]["legs_and_waist"] = "legs and waist roll/pitch held; waist yaw participates in IK"
+                collection["controllers"]["configuration_reference"] = [
+                    "src/vla_isaaclab/policies/orchard_pick.py",
+                    "src/vla_isaaclab/policies/ycb_sugar_box.py",
+                    "src/vla_isaaclab/envs/orchard_pick/env_cfg.py",
+                ]
             writer = StagingHDF5Writer(
                 root=PROJECT_ROOT / "outputs/lerobot_staging",
                 dataset_name=Path(ARGS.dataset_name).stem,
@@ -364,7 +475,7 @@ def main() -> int:
                 with torch.inference_mode():
                     for episode_index in range(ARGS.episodes):
                         if episode_index:
-                            env.reset(seed=42 + episode_index)
+                            env.reset(seed=ARGS.seed + episode_index)
                             policy = make_policy(env)
                         episode_succeeded = False
                         for episode_step in range(finite_steps):
@@ -372,6 +483,8 @@ def main() -> int:
                             snapshot = adapter.capture(reference_time_ns)
                             action = policy.compute(episode_step)
                             _, reward, terminated, timed_out, _ = env.step(action)
+                            if camera_videos is not None:
+                                camera_videos.write()
                             step_succeeded = task_succeeded(env) and not getattr(policy, "failed", False)
                             writer.add_frame(
                                 adapter.complete_frame(
@@ -381,7 +494,7 @@ def main() -> int:
                                     timed_out,
                                     episode_step + 1 == finite_steps,
                                     task_prompt,
-                                    42 + episode_index,
+                                    ARGS.seed + episode_index,
                                     step_succeeded,
                                 )
                             )
@@ -413,6 +526,8 @@ def main() -> int:
                 while APP.is_running() and (ARGS.steps == 0 or steps < ARGS.steps):
                     action = policy.compute(steps)
                     _, _, terminated, timed_out, _ = env.step(action)
+                    if camera_videos is not None:
+                        camera_videos.write()
                     if video_stream is not None:
                         import av
 
@@ -430,12 +545,18 @@ def main() -> int:
                         break
 
         report = validate(env, policy, steps, success_count, dataset_path)
-        output_dir = PROJECT_ROOT / "outputs/environments" / ARGS.task
+        output_dir = ARGS.report_dir or PROJECT_ROOT / "outputs/environments" / ARGS.task
         output_dir.mkdir(parents=True, exist_ok=True)
         (output_dir / "validation.json").write_text(json.dumps(report, indent=2) + "\n")
+        if hasattr(env, "orchard_trace"):
+            (output_dir / "trajectory.jsonl").write_text(
+                "".join(json.dumps(row) + "\n" for row in env.orchard_trace)
+            )
         print(json.dumps(report, indent=2), flush=True)
         return 0 if report["passed"] else 2
     finally:
+        if camera_videos is not None:
+            camera_videos.close()
         if video_stream is not None:
             for packet in video_stream.encode():
                 video_container.mux(packet)
@@ -445,10 +566,15 @@ def main() -> int:
 
 
 if __name__ == "__main__":
+    exit_code = 1
     try:
-        raise SystemExit(main())
+        exit_code = main()
     except Exception:
         traceback.print_exc()
-        raise
     finally:
-        APP.close()
+        write_exit_status(exit_code)
+        try:
+            APP.close()
+        except SystemExit:
+            pass
+    raise SystemExit(exit_code)

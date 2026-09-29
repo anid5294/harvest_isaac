@@ -37,10 +37,10 @@ class _SugarBoxSemantics:
 class YCBSugarBoxScriptedPolicy:
     """Own task phases, bounded IK, hand targets, and action normalization."""
 
-    def __init__(self, env):
+    def __init__(self, env, strategy=None):
         self.env = env
         self.robot = env.scene["robot"]
-        self.strategy = SugarBoxPhaseStrategy(env, _G1Semantics, _SugarBoxSemantics)
+        self.strategy = strategy if strategy is not None else SugarBoxPhaseStrategy(env, _G1Semantics, _SugarBoxSemantics)
         _, self.joint_names, self.action_joint_ids = resolved_action_joints(env)
         self.name_to_action_index = {name: index for index, name in enumerate(self.joint_names)}
 

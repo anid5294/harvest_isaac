@@ -3,4 +3,4 @@ set -e
 source "$(dirname "$0")/activate.sh"
 check_install_environment
 cd "$VLA_ISAACLAB_PROJECT"
-exec python scripts/run_env.py "$@"
+exec python scripts/run_checked.py "$@"
