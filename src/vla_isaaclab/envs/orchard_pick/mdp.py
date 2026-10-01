@@ -3,8 +3,9 @@
 import torch
 
 from ..common.g1 import LEFT_END_EFFECTOR, LEFT_HAND_JOINT_NAMES
-from .layout import settled_in_basket
+from .layout import settled_in_basket, stem_geometry
 from .contact import FINGER_LINKS, opposing_contact
+from .interaction import HarvestEvidence
 
 
 def reset_orchard(env, env_ids):
@@ -36,6 +37,7 @@ def reset_orchard(env, env_ids):
     env.orchard_pull_started = False
     env.orchard_lift_steps = 0
     env.orchard_contact_steps = 0
+    env.orchard_evidence = HarvestEvidence()
     env.orchard_last_step = -1
     env.orchard_metrics = {}
     env.orchard_trace = []
@@ -52,11 +54,12 @@ def reset_orchard(env, env_ids):
         joint = UsdPhysics.FixedJoint.Define(stage, path)
         joint.CreateBody0Rel().SetTargets([f"{root}/Stem_{i}"])
         joint.CreateBody1Rel().SetTargets([f"{root}/Apple_{i:02d}"])
-        # Stem center is radius..0.13 m above fruit center, aligned with world Z.
-        joint.CreateLocalPos0Attr(Gf.Vec3f(0, 0, -(0.13-layout.radius)/2))
-        joint.CreateLocalPos1Attr(Gf.Vec3f(0, 0, layout.radius))
+        geometry = stem_geometry(layout, i)
+        joint.CreateLocalPos0Attr(Gf.Vec3f(*geometry["stem_joint_position"]))
+        joint.CreateLocalPos1Attr(Gf.Vec3f(*geometry["fruit_joint_position"]))
         joint.CreateLocalRot0Attr(Gf.Quatf(1))
-        joint.CreateLocalRot1Attr(Gf.Quatf(1))
+        w, x, y, z = geometry["fruit_joint_rotation"]
+        joint.CreateLocalRot1Attr(Gf.Quatf(w, Gf.Vec3f(x, y, z)))
         joint.CreateBreakForceAttr(layout.stem_break_force)
         joint.CreateBreakTorqueAttr(0.35)
         joint.CreateExcludeFromArticulationAttr(True)
@@ -83,11 +86,10 @@ def update_metrics(env):
     detached = layout.target_index in env.orchard_broken
     if env.orchard_broken - {layout.target_index}:
         env.orchard_failure = "non_target_apple_detached"
-    if detached and not env.orchard_pull_started:
+    measured_task = layout.tree_model == "commercial"
+    if detached and not measured_task and not env.orchard_pull_started:
         env.orchard_failure = "premature_stem_break"
     lifted = detached and position[2] > layout.target[2] + 0.06 and hand_distance < 0.18
-    env.orchard_lift_steps = env.orchard_lift_steps + 1 if lifted else 0
-    env.orchard_carried |= env.orchard_lift_steps >= 10
     forces = env.scene["apple_contact"].data.force_matrix_w
     if forces is None or forces.shape[2] != 1 + len(FINGER_LINKS):
         raise RuntimeError("Apple contact filters did not resolve floor plus seven finger links")
@@ -96,6 +98,19 @@ def update_metrics(env):
     contact = opposing_contact(finger_forces)
     env.orchard_contact_steps = env.orchard_contact_steps + 1 if contact else 0
     grasp_contact = env.orchard_contact_steps >= 5
+    if measured_task:
+        # Break/carry evidence comes from sensor state, not scripted phase flags.
+        # This short grace handles contact readback at the joint-break boundary;
+        # it is not a claim of force closure.
+        env.orchard_evidence.update(detached=detached, sustained_contact=grasp_contact,
+                                    lift_candidate=lifted)
+        env.orchard_lift_steps = env.orchard_evidence.lift_steps
+        env.orchard_carried = env.orchard_evidence.carried
+        if env.orchard_evidence.failure:
+            env.orchard_failure = env.orchard_evidence.failure
+    else:
+        env.orchard_lift_steps = env.orchard_lift_steps + 1 if lifted else 0
+        env.orchard_carried |= env.orchard_lift_steps >= 10
     finger_ids, finger_names = robot.find_bodies(list(FINGER_LINKS), preserve_order=True)
     if list(finger_names) != list(FINGER_LINKS):
         raise RuntimeError(f"Unexpected Dex3 finger links: {finger_names}")
@@ -108,6 +123,9 @@ def update_metrics(env):
         apple.data.root_pos_w[0] - robot.data.body_pos_w[0, palm_ids[0]]).tolist()
     supported = forces is not None and float(forces[0, 0, 0, 2]) > layout.mass * 9.81 * 0.4
     opened = float(torch.max(torch.abs(robot.data.joint_pos[0, hand_ids]))) < 0.30
+    if measured_task:
+        env.orchard_released = env.orchard_evidence.released(
+            opened=opened, contact=contact, hand_distance=hand_distance)
     placed = (finite and detached and env.orchard_carried and env.orchard_released
               and opened and hand_distance > 0.18 and supported
               and settled_in_basket(position, speed, layout.basket, layout.radius))
@@ -116,7 +134,8 @@ def update_metrics(env):
         env.orchard_failure = "non_finite_state"
     elif position[2] < 0.40:
         env.orchard_failure = "apple_dropped"
-    metrics = dict(detached=detached, carried=env.orchard_carried, released=env.orchard_released,
+    metrics = dict(detached=detached, detached_indices=sorted(env.orchard_broken),
+                   carried=env.orchard_carried, released=env.orchard_released,
                    supported=bool(supported), opened=opened, hand_distance=hand_distance,
                    position=position, speed=speed, stable_steps=env.orchard_hold,
                    finger_contact_force_n=finger_forces, finger_link_distance_m=finger_distances,

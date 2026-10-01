@@ -15,7 +15,7 @@ from ..common import (
 )
 from ..orchard_preview.env_cfg import _branch, _static_box, _foliage
 from ..orchard_preview.layout import cylinder_between
-from .layout import make_layout
+from .layout import make_layout, stem_geometry
 from . import mdp
 from .contact import FINGER_LINKS
 
@@ -23,6 +23,9 @@ from .contact import FINGER_LINKS
 EYE = (0.9, 3.6, 2.7)
 LOOKAT = (-0.10, -0.15, 0.95)
 CAMERA_PROFILE = "orchard_fixed_front_top_three_view_v1"
+COMMERCIAL_EYE = (1.5, 4.5, 3.3)
+COMMERCIAL_LOOKAT = (0.1, 0.0, 1.4)
+COMMERCIAL_CAMERA_PROFILE = "orchard_commercial_full_tree_three_view_v1"
 
 
 @configclass
@@ -72,6 +75,8 @@ class OrchardPickEnvCfg(VLAEnvCfg):
     camera_target: tuple = LOOKAT
     camera_profile: str = CAMERA_PROFILE
     orchard_seed: int = 42
+    tree_model: str = "commercial"
+    commercial_tree_summary: dict | None = None
     grasp_offset: tuple = (-0.065, -0.085, 0.035)
 
     def __post_init__(self):
@@ -80,18 +85,54 @@ class OrchardPickEnvCfg(VLAEnvCfg):
 
     def configure_layout(self, seed):
         self.orchard_seed = seed
-        layout = make_layout(seed)
+        layout = make_layout(seed, tree_model=self.tree_model)
         self.orchard_layout = layout
         scene = self.scene
-        scene.trunk = _branch("Trunk", cylinder_between(
-            (layout.trunk[0], layout.trunk[1], 0.0),
-            (layout.trunk[0], layout.trunk[1], 1.6), 0.055))
+        for name in getattr(self, "_orchard_scene_names", ()):
+            if hasattr(scene, name):
+                delattr(scene, name)
+        self._orchard_scene_names = []
+
+        def add_asset(name, asset):
+            setattr(scene, name, asset)
+            self._orchard_scene_names.append(name)
+
+        if self.tree_model == "commercial":
+            from .commercial_scene import add_commercial_tree
+
+            tree = add_commercial_tree(scene, seed, add_asset)
+            self.commercial_tree_summary = {
+                "training_system": "tall_spindle_trellis",
+                "seed": seed,
+                "branch_count": len(tree.branches),
+                "fruit_count": len(tree.fruits),
+                "leaf_count": len(tree.leaves),
+                "provenance": "original_procedural",
+                "collision": "branch_and_trellis_cylinders; foliage_visual_only",
+            }
+            self.camera_eye = COMMERCIAL_EYE
+            self.camera_target = COMMERCIAL_LOOKAT
+            self.camera_profile = COMMERCIAL_CAMERA_PROFILE
+        elif self.tree_model == "legacy":
+            self.commercial_tree_summary = None
+            add_asset("trunk", _branch("Trunk", cylinder_between(
+                (layout.trunk[0], layout.trunk[1], 0.0),
+                (layout.trunk[0], layout.trunk[1], 1.6), 0.055)))
+            for i, position in enumerate(layout.apples):
+                endpoint = stem_geometry(layout, i)["anchor"]
+                add_asset(f"branch_{i}", _branch(f"Branch_{i}", cylinder_between(
+                    (layout.trunk[0], layout.trunk[1], endpoint[2]), endpoint, 0.018)))
+            add_asset("foliage", _foliage("Foliage", (0.12, 0.20, 1.55), 0.26))
+            self.camera_eye = EYE
+            self.camera_target = LOOKAT
+            self.camera_profile = CAMERA_PROFILE
+        else:
+            raise ValueError(f"Unknown orchard tree model: {self.tree_model}")
+        scene.cam_left_high = camera_cfg(self.camera_eye, self.camera_target)
         for i, position in enumerate(layout.apples):
-            endpoint = (position[0], position[1], position[2] + 0.13)
-            setattr(scene, f"branch_{i}", _branch(f"Branch_{i}", cylinder_between(
-                (layout.trunk[0], layout.trunk[1], endpoint[2]), endpoint, 0.018)))
-            setattr(scene, f"stem_{i}", _branch(f"Stem_{i}", cylinder_between(
-                (position[0], position[1], position[2] + layout.radius), endpoint, 0.003)))
+            stem = stem_geometry(layout, i)
+            add_asset(f"stem_{i}", _branch(f"Stem_{i}", cylinder_between(
+                stem["bottom"], stem["anchor"], 0.003)))
             apple = RigidObjectCfg(
                 prim_path=f"{{ENV_REGEX_NS}}/Apple_{i:02d}",
                 spawn=sim_utils.SphereCfg(
@@ -106,18 +147,17 @@ class OrchardPickEnvCfg(VLAEnvCfg):
                 ),
                 init_state=RigidObjectCfg.InitialStateCfg(pos=position),
             )
-            setattr(scene, "object" if i == layout.target_index else f"apple_{i}", apple)
+            add_asset("object" if i == layout.target_index else f"apple_{i}", apple)
         scene.apple_contact.prim_path = f"{{ENV_REGEX_NS}}/Apple_{layout.target_index:02d}"
-        scene.foliage = _foliage("Foliage", (0.12, 0.20, 1.55), 0.26)
         x, y, z = layout.basket
         blue = (0.06, 0.25, 0.65)
-        scene.basket_floor = _static_box("BasketFloor", (0.32, 0.28, 0.02), (x, y, z), blue)
-        scene.pedestal = _static_box("Pedestal", (0.09, 0.09, z-0.01),
-                                     (x, y, (z-0.01)/2), (0.3, 0.3, 0.3))
+        add_asset("basket_floor", _static_box("BasketFloor", (0.32, 0.28, 0.02), (x, y, z), blue))
+        add_asset("pedestal", _static_box("Pedestal", (0.09, 0.09, z-0.01),
+                                         (x, y, (z-0.01)/2), (0.3, 0.3, 0.3)))
         for i, (size, position) in enumerate((
             ((0.02, 0.28, 0.10), (x-0.16, y, z+0.06)),
             ((0.02, 0.28, 0.10), (x+0.16, y, z+0.06)),
             ((0.32, 0.02, 0.10), (x, y-0.14, z+0.06)),
             ((0.32, 0.02, 0.10), (x, y+0.14, z+0.06)),
         )):
-            setattr(scene, f"wall_{i}", _static_box(f"BasketWall_{i}", size, position, blue))
+            add_asset(f"wall_{i}", _static_box(f"BasketWall_{i}", size, position, blue))

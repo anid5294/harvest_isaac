@@ -45,6 +45,8 @@ def parse_args():
     parser.add_argument("--camera-videos", type=Path, help="New directory for profile-specific H.264 camera inspection videos.")
     parser.add_argument("--orchard-tree-asset", type=Path,
                         help="Prepared visual tree directory (tree.usda and manifest.json); active orchard only.")
+    parser.add_argument("--orchard-tree-model", choices=("commercial", "legacy"), default="commercial",
+                        help="Commercial physical tree (default) or old three-apple calibration fixture.")
     parser.add_argument("--record-format", choices=("none", "hdf5", "lerobot"), default="none")
     parser.add_argument(
         "--lerobot-version", choices=("3", "2.1"), default="3",
@@ -117,6 +119,11 @@ def make_policy(env):
     if selected == "auto":
         selected = {"VLA-YCBSugarBox-G1-JointPos-v0": "sugar-box",
                     "VLA-OrchardPick-G1-JointPos-v0": "orchard"}.get(ARGS.task, "standing")
+        if selected == "orchard" and env.cfg.orchard_layout.tree_model == "commercial":
+            # The old grasp script is not a verified controller for this tree.
+            # This milestone defaults to a stable scene for an external controller.
+            selected = "standing"
+            print("[INFO] Commercial tree: auto selects standing; no trained harvesting policy is bundled.")
     if selected == "orchard":
         from vla_isaaclab.policies.orchard_pick import OrchardScriptedPolicy
         return OrchardScriptedPolicy(env)
@@ -250,6 +257,8 @@ def validate(env, policy, steps, success_count, dataset_path=None):
             "camera_videos": str(ARGS.camera_videos) if ARGS.camera_videos else None,
             "camera_profile": env.cfg.camera_profile,
             "tree_asset": getattr(env.cfg, "tree_asset_metadata", None),
+            "tree_model": env.cfg.orchard_layout.tree_model,
+            "tree_structure": getattr(env.cfg, "commercial_tree_summary", None),
         }
     if "success" in env.termination_manager.active_terms:
         report["passed"] = bool(
@@ -292,8 +301,11 @@ def main() -> int:
     if ARGS.task == "VLA-OrchardPick-G1-JointPos-v0":
         if ARGS.episodes != 1:
             raise ValueError("Run one orchard seed per process; stem resets and batch collection need lab validation")
+        cfg.tree_model = ARGS.orchard_tree_model
         cfg.configure_layout(ARGS.seed)
         if ARGS.orchard_tree_asset:
+            if cfg.tree_model != "legacy":
+                raise ValueError("--orchard-tree-asset is only for --orchard-tree-model legacy; commercial tree builds its own matched geometry")
             from isaaclab.assets import AssetBaseCfg
             import isaaclab.sim as sim_utils
             from vla_isaaclab.envs.orchard_pick.tree_asset import validate_tree_asset
