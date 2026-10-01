@@ -26,6 +26,17 @@ def check(report, passive=False):
             errors.append("Attached fruit moved more than 15 mm during passive hold")
         if metrics.get("detached") or metrics.get("speed", float("inf")) > 0.035:
             errors.append("Fruit detached or failed to settle during passive hold")
+        if metrics.get("detached_indices"):
+            errors.append("One or more fruit stems broke during passive hold")
+        if layout.get("tree_model") == "commercial":
+            for index, initial_position in enumerate(layout.get("apples", [])):
+                name = "object" if index == layout.get("target_index", 0) else f"apple_{index}"
+                state = report.get("rigid_objects", {}).get(name, {})
+                current_position = state.get("position_m", [])
+                if (len(current_position) != 3 or not state.get("finite")
+                        or not state.get("stable")
+                        or math.dist(current_position, initial_position) > 0.015):
+                    errors.append(f"{name}: commercial fruit did not remain stably attached")
     elif not (report.get("passed") and report.get("success_count", 0) > 0
               and report.get("termination_terms", {}).get("success")
               and metrics.get("success")):
@@ -36,7 +47,8 @@ def check(report, passive=False):
 def check_videos(directory, expected_frames, camera_profile=None):
     errors = []
     names = (("external", "left_wrist", "right_wrist")
-             if camera_profile == "orchard_fixed_front_top_three_view_v1"
+             if camera_profile in ("orchard_fixed_front_top_three_view_v1",
+                                   "orchard_commercial_full_tree_three_view_v1")
              else ("external", "head", "left_wrist", "right_wrist"))
     for name in names:
         path = directory / f"{name}.mp4"
