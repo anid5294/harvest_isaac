@@ -18,10 +18,14 @@ from vla_isaaclab.envs.common.managers import ACTION_TERM_NAME
 
 POSE_NAMES = ("position.x", "position.y", "position.z", "quaternion.w", "quaternion.x", "quaternion.y", "quaternion.z")
 ORCHARD_THREE_VIEW_PROFILE = "orchard_fixed_front_top_three_view_v1"
+ORCHARD_COMMERCIAL_THREE_VIEW_PROFILE = "orchard_commercial_full_tree_three_view_v1"
+ORCHARD_THREE_VIEW_PROFILES = (
+    ORCHARD_THREE_VIEW_PROFILE, ORCHARD_COMMERCIAL_THREE_VIEW_PROFILE,
+)
 
 
 def camera_features_for_profile(profile):
-    if profile == ORCHARD_THREE_VIEW_PROFILE:
+    if profile in ORCHARD_THREE_VIEW_PROFILES:
         return (
             ("cam_left_high", "observation.images.cam_left_high"),
             ("cam_left_wrist", "observation.images.cam_left_wrist"),
@@ -101,7 +105,7 @@ class EnvironmentFrameAdapter:
         camera_features = camera_features_for_profile(
             self.camera_profile or ("legacy_orchard" if hasattr(env.cfg, "orchard_layout") else None)
         )
-        if self.camera_profile == ORCHARD_THREE_VIEW_PROFILE:
+        if self.camera_profile in ORCHARD_THREE_VIEW_PROFILES:
             missing = [name for name, _ in camera_features if name not in env.scene.sensors]
             if missing:
                 raise RuntimeError(f"Orchard camera profile is missing required sensors: {missing}")
@@ -142,7 +146,7 @@ class EnvironmentFrameAdapter:
                     "feature_key": feature_name,
                     "identifier": f"isaac-sim:{sensor_name}",
                     "parent_link": (
-                        "world" if self.camera_profile == ORCHARD_THREE_VIEW_PROFILE
+                        "world" if self.camera_profile in ORCHARD_THREE_VIEW_PROFILES
                         and sensor_name == "cam_left_high" else parent_links[sensor_name]
                     ),
                     "position_xyz_m": list(offset.pos),
@@ -160,7 +164,7 @@ class EnvironmentFrameAdapter:
                         "clipping_range_m": list(camera.cfg.spawn.clipping_range),
                     },
                 }
-            if self.camera_profile == ORCHARD_THREE_VIEW_PROFILE:
+            if self.camera_profile in ORCHARD_THREE_VIEW_PROFILES:
                 metadata["camera_profile"] = self.camera_profile
                 metadata["mount_role"] = (
                     "fixed_external_front_top" if sensor_name == "cam_left_high"
