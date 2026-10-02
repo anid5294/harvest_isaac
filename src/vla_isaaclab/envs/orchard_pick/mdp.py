@@ -24,6 +24,9 @@ def reset_orchard(env, env_ids):
                 path = str(PhysicsSchemaTools.decodeSdfPath(*event.payload["jointPath"]))
                 if path in env.orchard_joint_paths:
                     env.orchard_broken.add(env.orchard_joint_paths.index(path))
+                    diagnostics = getattr(env, "_orchard_physics_diagnostics", None)
+                    if diagnostics is not None:
+                        diagnostics.on_break(path)
         env.orchard_break_subscription = (
             omni.physx.get_physx_interface().get_simulation_event_stream_v2()
             .create_subscription_to_pop(on_event)
