@@ -1,26 +1,33 @@
+cat > scripts/build_orchardbench_usd.py <<'PY'
 #!/usr/bin/env python3
-"""Compile canonical tree to metre/Z-up USD.
+"""Compile canonical OrchardBench tree to metre/Z-up USD.
 
 Collision modes:
 
     none
-        No branch collision geometry. Use this to determine whether the
-        OrchardBench branch colliders are responsible for PhysX GPU crashes.
+        No branch collision geometry. Intended as a diagnostic to determine
+        whether branch convex hulls are responsible for a PhysX failure.
 
     coarse
-        Generate collision only for sufficiently large branch segments.
-        This is the recommended default for the current harvesting milestone.
+        Create collision only for sufficiently large branch segments. Fine
+        twigs remain visible but are not separate PhysX convex hulls.
 
     all
-        Preserve the original behavior: an eight-sided convex hull collider
-        for every branch segment.
+        Preserve the original behavior: create an eight-sided convex-hull
+        collider for every branch segment.
 
-Requires pxr (Isaac Python or Blender's bundled Python). No simulator is started.
+The chosen fruit is omitted from the static tree because Isaac creates it as
+an independent dynamic body. Other fruit and foliage remain visual-only for
+the current single-fruit harvesting gate.
 
-The chosen fruit is omitted from the static tree because Isaac creates it as an
-independent dynamic body. Other fruit and foliage remain visual-only in the
-single-fruit harvesting gate.
+This script can run in two environments:
+
+1. A Python environment where pxr is already importable (for example Blender).
+2. The Songkhla Isaac Lab Conda environment, where pxr becomes available only
+   after Isaac/Kit is initialized through AppLauncher.
 """
+
+from __future__ import annotations
 
 import argparse
 import hashlib
@@ -32,19 +39,14 @@ import sys
 import types
 
 
-# Conservative initial physics LOD thresholds.
-#
-# These are deliberately larger than the smallest visible OrchardBench twigs.
-# Thin twigs still render, but they do not become separate PhysX convex hulls.
+PROJECT = Path(__file__).resolve().parents[1]
+
 DEFAULT_MIN_COLLIDER_RADIUS_M = 0.010
 DEFAULT_MIN_COLLIDER_LENGTH_M = 0.040
 
 
 def load_adapter():
-    folder = (
-        Path(__file__).resolve().parents[1]
-        / "src/vla_isaaclab/envs/orchard_pick"
-    )
+    folder = PROJECT / "src/vla_isaaclab/envs/orchard_pick"
 
     package = types.ModuleType("_offline_orchard")
     package.__path__ = [str(folder)]
@@ -54,8 +56,16 @@ def load_adapter():
         "_offline_orchard.external_tree",
         folder / "external_tree.py",
     )
+
+    if spec is None or spec.loader is None:
+        raise RuntimeError(
+            f"Could not load external tree adapter from {folder / 'external_tree.py'}"
+        )
+
     module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
     spec.loader.exec_module(module)
+
     return module
 
 
@@ -70,17 +80,22 @@ def segment_length(start, end):
 def validate_branch(branch):
     start = branch["start"]
     end = branch["end"]
-    r0 = branch["radius_start"]
-    r1 = branch["radius_end"]
+    r0 = float(branch["radius_start"])
+    r1 = float(branch["radius_end"])
 
-    values = [*start, *end, r0, r1]
+    values = [
+        *[float(x) for x in start],
+        *[float(x) for x in end],
+        r0,
+        r1,
+    ]
 
-    if not all(math.isfinite(float(x)) for x in values):
+    if not all(math.isfinite(x) for x in values):
         raise ValueError(
             f"Branch {branch['id']} contains non-finite geometry: {values}"
         )
 
-    if r0 <= 0 or r1 <= 0:
+    if r0 <= 0.0 or r1 <= 0.0:
         raise ValueError(
             f"Branch {branch['id']} has non-positive radius: "
             f"r0={r0}, r1={r1}"
@@ -88,9 +103,9 @@ def validate_branch(branch):
 
     length = segment_length(start, end)
 
-    if length <= 1e-6:
+    if not math.isfinite(length) or length <= 1.0e-6:
         raise ValueError(
-            f"Branch {branch['id']} has near-zero length: {length}"
+            f"Branch {branch['id']} has invalid/near-zero length: {length}"
         )
 
     return length
@@ -114,6 +129,12 @@ def build(
     output.mkdir(parents=True, exist_ok=True)
 
     stage = Usd.Stage.CreateNew(str(output / "tree.usda"))
+
+    if stage is None:
+        raise RuntimeError(
+            f"Failed to create USD stage at {output / 'tree.usda'}"
+        )
+
     UsdGeom.SetStageMetersPerUnit(stage, 1.0)
     UsdGeom.SetStageUpAxis(stage, UsdGeom.Tokens.z)
 
@@ -132,10 +153,13 @@ def build(
         )
 
         shader.CreateIdAttr("UsdPreviewSurface")
+
         shader.CreateInput(
             "diffuseColor",
             Sdf.ValueTypeNames.Color3f,
-        ).Set(Gf.Vec3f(*color))
+        ).Set(
+            Gf.Vec3f(*color)
+        )
 
         shader.CreateInput(
             "roughness",
@@ -155,8 +179,8 @@ def build(
     )
 
     leaf_materials = [
-        material(f"Leaf{i}", c)
-        for i, c in enumerate(
+        material(f"Leaf{i}", color)
+        for i, color in enumerate(
             (
                 (0.08, 0.24, 0.025),
                 (0.12, 0.32, 0.04),
@@ -169,7 +193,10 @@ def build(
         obj = UsdGeom.Mesh.Define(stage, path)
 
         obj.CreatePointsAttr(
-            [Gf.Vec3f(*v) for v in vertices]
+            [
+                Gf.Vec3f(*vertex)
+                for vertex in vertices
+            ]
         )
 
         obj.CreateFaceVertexCountsAttr(
@@ -180,7 +207,7 @@ def build(
         obj.CreateSubdivisionSchemeAttr("none")
         obj.CreateDoubleSidedAttr(True)
 
-        if mat:
+        if mat is not None:
             UsdShade.MaterialBindingAPI.Apply(
                 obj.GetPrim()
             ).Bind(mat)
@@ -188,10 +215,13 @@ def build(
         return obj
 
     def tapered(start, end, r0, r1, sides):
-        z = Gf.Vec3d(*end) - Gf.Vec3d(*start)
+        start_vec = Gf.Vec3d(*start)
+        end_vec = Gf.Vec3d(*end)
 
+        z = end_vec - start_vec
         length = z.GetLength()
-        if length <= 1e-9:
+
+        if not math.isfinite(length) or length <= 1.0e-9:
             raise ValueError(
                 f"Cannot construct tapered segment with length {length}"
             )
@@ -199,9 +229,9 @@ def build(
         z.Normalize()
 
         ref = (
-            Gf.Vec3d(0, 0, 1)
+            Gf.Vec3d(0.0, 0.0, 1.0)
             if abs(z[2]) < 0.9
-            else Gf.Vec3d(1, 0, 0)
+            else Gf.Vec3d(1.0, 0.0, 0.0)
         )
 
         x = Gf.Cross(ref, z).GetNormalized()
@@ -209,14 +239,23 @@ def build(
 
         points = [
             tuple(
-                Gf.Vec3d(*p)
-                + r
+                Gf.Vec3d(*point)
+                + radius
                 * (
-                    math.cos(2 * math.pi * i / sides) * x
-                    + math.sin(2 * math.pi * i / sides) * y
+                    math.cos(
+                        2.0 * math.pi * i / sides
+                    )
+                    * x
+                    + math.sin(
+                        2.0 * math.pi * i / sides
+                    )
+                    * y
                 )
             )
-            for p, r in ((start, r0), (end, r1))
+            for point, radius in (
+                (start, r0),
+                (end, r1),
+            )
             for i in range(sides)
         ]
 
@@ -250,35 +289,35 @@ def build(
     skipped_collider_branch_ids = []
     branch_diagnostics = []
 
-    for b in tree["branches"]:
-        length = validate_branch(b)
+    #
+    # Wood
+    #
+    for branch in tree["branches"]:
+        length = validate_branch(branch)
 
-        start = b["start"]
-        end = b["end"]
-        r0 = float(b["radius_start"])
-        r1 = float(b["radius_end"])
+        start = branch["start"]
+        end = branch["end"]
+        r0 = float(branch["radius_start"])
+        r1 = float(branch["radius_end"])
 
-        # Always generate the visual branch.
-        visual_args = (
-            start,
-            end,
-            r0,
-            r1,
-        )
-
+        # Visual geometry is always preserved.
         mesh(
-            f"/Tree/Wood/B{b['id']}",
-            *tapered(*visual_args, 16),
+            f"/Tree/Wood/B{branch['id']}",
+            *tapered(
+                start,
+                end,
+                r0,
+                r1,
+                16,
+            ),
             wood,
         )
 
         max_radius = max(r0, r1)
         min_radius = min(r0, r1)
 
-        create_collider = False
-
-        if collision_mode == "all":
-            create_collider = True
+        if collision_mode == "none":
+            create_collider = False
 
         elif collision_mode == "coarse":
             create_collider = (
@@ -286,33 +325,37 @@ def build(
                 and max_radius >= min_collider_radius_m
             )
 
-        elif collision_mode == "none":
-            create_collider = False
+        elif collision_mode == "all":
+            create_collider = True
 
         else:
             raise ValueError(
                 f"Unknown collision mode: {collision_mode}"
             )
 
-        diagnostic = {
-            "id": b["id"],
-            "length_m": length,
-            "radius_start_m": r0,
-            "radius_end_m": r1,
-            "max_radius_m": max_radius,
-            "min_radius_m": min_radius,
-            "aspect_ratio": length / max_radius,
-            "collider": create_collider,
-        }
-
-        branch_diagnostics.append(diagnostic)
+        branch_diagnostics.append(
+            {
+                "id": branch["id"],
+                "length_m": length,
+                "radius_start_m": r0,
+                "radius_end_m": r1,
+                "min_radius_m": min_radius,
+                "max_radius_m": max_radius,
+                "aspect_ratio_length_over_max_radius": (
+                    length / max_radius
+                ),
+                "collider": create_collider,
+            }
+        )
 
         if not create_collider:
-            skipped_collider_branch_ids.append(b["id"])
+            skipped_collider_branch_ids.append(
+                branch["id"]
+            )
             continue
 
         collider = mesh(
-            f"/Tree/Colliders/B{b['id']}",
+            f"/Tree/Colliders/B{branch['id']}",
             *tapered(
                 start,
                 end,
@@ -322,7 +365,9 @@ def build(
             ),
         )
 
-        collider.CreateVisibilityAttr("invisible")
+        collider.CreateVisibilityAttr(
+            "invisible"
+        )
 
         UsdPhysics.CollisionAPI.Apply(
             collider.GetPrim()
@@ -330,76 +375,112 @@ def build(
 
         UsdPhysics.MeshCollisionAPI.Apply(
             collider.GetPrim()
-        ).CreateApproximationAttr("convexHull")
+        ).CreateApproximationAttr(
+            "convexHull"
+        )
 
-        collider_branch_ids.append(b["id"])
+        collider_branch_ids.append(
+            branch["id"]
+        )
 
+    #
+    # Leaves are visual-only.
+    #
     source_meshes = {
-        m["class"]: m
-        for m in tree["leaf_meshes"]
+        item["class"]: item
+        for item in tree["leaf_meshes"]
     }
 
-    for i, leaf in enumerate(tree["leaves"]):
-        source = source_meshes[leaf["mesh_class"]]
+    for i, leaf in enumerate(
+        tree["leaves"]
+    ):
+        source = source_meshes[
+            leaf["mesh_class"]
+        ]
 
-        q = leaf["orientation_xyzw"]
+        q = leaf[
+            "orientation_xyzw"
+        ]
 
         rotation = Gf.Rotation(
             Gf.Quatd(
                 q[3],
-                Gf.Vec3d(*q[:3]),
+                Gf.Vec3d(
+                    *q[:3]
+                ),
             )
         )
 
         points = [
             tuple(
                 rotation.TransformDir(
-                    Gf.Vec3d(*v)
+                    Gf.Vec3d(*vertex)
                 )
-                + Gf.Vec3d(*leaf["position"])
+                + Gf.Vec3d(
+                    *leaf["position"]
+                )
             )
-            for v in source["vertices"]
+            for vertex in source[
+                "vertices"
+            ]
         ]
 
         mesh(
             f"/Tree/Leaves/L{i}",
             points,
-            source["triangle_indices"],
-            leaf_materials[i % 3],
+            source[
+                "triangle_indices"
+            ],
+            leaf_materials[
+                i % len(
+                    leaf_materials
+                )
+            ],
         )
 
-    for f in tree["fruits"]:
-        # Selected fruit is created dynamically by the Isaac task.
-        if f["id"] == fruit["id"]:
+    #
+    # All fruit except the selected target remains visual-only.
+    # The selected target fruit is created dynamically by the Isaac task.
+    #
+    for item in tree["fruits"]:
+        if item["id"] == fruit["id"]:
             continue
 
         sphere = UsdGeom.Sphere.Define(
             stage,
-            f"/Tree/VisualFruit/F{f['id']}",
+            f"/Tree/VisualFruit/F{item['id']}",
         )
 
-        sphere.CreateRadiusAttr(f["radius"])
+        sphere.CreateRadiusAttr(
+            item["radius"]
+        )
+
         sphere.AddTranslateOp().Set(
-            Gf.Vec3d(*f["center"])
+            Gf.Vec3d(
+                *item["center"]
+            )
         )
 
         UsdShade.MaterialBindingAPI.Apply(
             sphere.GetPrim()
         ).Bind(
             material(
-                f"Fruit{f['id']}",
-                f["color"],
+                f"Fruit{item['id']}",
+                item["color"],
             )
         )
 
-        bottom = list(f["center"])
-        bottom[2] += f["radius"]
+        bottom = list(
+            item["center"]
+        )
+
+        bottom[2] += item["radius"]
 
         mesh(
-            f"/Tree/VisualStems/S{f['id']}",
+            f"/Tree/VisualStems/S{item['id']}",
             *tapered(
                 bottom,
-                f["anchor"],
+                item["anchor"],
                 0.0015,
                 0.0015,
                 6,
@@ -410,16 +491,28 @@ def build(
     stage.GetRootLayer().Save()
 
     #
-    # Diagnostic collision-review layer.
+    # Collision-review USD.
     #
-    # It references the same tree.usda and simply makes existing colliders
-    # visible while hiding visual wood.
+    # This references the exact generated collision geometry rather than
+    # constructing a second approximation.
     #
     debug = Usd.Stage.CreateNew(
-        str(output / "collision_review.usda")
+        str(
+            output
+            / "collision_review.usda"
+        )
     )
 
-    UsdGeom.SetStageMetersPerUnit(debug, 1.0)
+    if debug is None:
+        raise RuntimeError(
+            "Failed to create collision_review.usda"
+        )
+
+    UsdGeom.SetStageMetersPerUnit(
+        debug,
+        1.0,
+    )
+
     UsdGeom.SetStageUpAxis(
         debug,
         UsdGeom.Tokens.z,
@@ -434,7 +527,9 @@ def build(
         "./tree.usda"
     )
 
-    debug.SetDefaultPrim(debug_root)
+    debug.SetDefaultPrim(
+        debug_root
+    )
 
     for branch_id in collider_branch_ids:
         collider_prim = debug.GetPrimAtPath(
@@ -461,11 +556,13 @@ def build(
 
     debug.GetRootLayer().Save()
 
-    diagnostics_path = (
-        output / "branch_collision_diagnostics.json"
-    )
-
-    diagnostics_path.write_text(
+    #
+    # Collision diagnostics.
+    #
+    (
+        output
+        / "branch_collision_diagnostics.json"
+    ).write_text(
         json.dumps(
             branch_diagnostics,
             indent=2,
@@ -476,12 +573,12 @@ def build(
     if collision_mode == "none":
         collision_description = (
             "no static branch colliders; "
-            "visual-only tree for collision ablation"
+            "visual-only tree collision ablation"
         )
 
     elif collision_mode == "coarse":
         collision_description = (
-            "static eight-sided tapered convex hulls only for "
+            "static eight-sided tapered convex hulls for "
             f"segments with length >= {min_collider_length_m:.4f} m "
             f"and max radius >= {min_collider_radius_m:.4f} m; "
             "smaller twigs visual-only"
@@ -494,32 +591,53 @@ def build(
         )
 
     manifest = {
-        "schema": "orchardbench_isaac_asset_v1",
+        "schema": (
+            "orchardbench_isaac_asset_v1"
+        ),
         "tree_file": "tree.usda",
         "tree_sha256": hashlib.sha256(
-            (output / "tree.usda").read_bytes()
+            (
+                output
+                / "tree.usda"
+            ).read_bytes()
         ).hexdigest(),
         "canonical_sha256": hashlib.sha256(
-            Path(tree_path).read_bytes()
+            Path(
+                tree_path
+            ).read_bytes()
         ).hexdigest(),
         "source": tree["source"],
         "seed": tree["seed"],
-        "selected_fruit_id": fruit["id"],
+        "selected_fruit_id": (
+            fruit["id"]
+        ),
         "layout": layout.metadata(),
-        "topology_validation": tree[
-            "topology_validation"
-        ],
-        "branch_count": len(tree["branches"]),
-        "fruit_count": len(tree["fruits"]),
-        "leaf_count": len(tree["leaves"]),
+        "topology_validation": (
+            tree[
+                "topology_validation"
+            ]
+        ),
+        "branch_count": len(
+            tree["branches"]
+        ),
+        "fruit_count": len(
+            tree["fruits"]
+        ),
+        "leaf_count": len(
+            tree["leaves"]
+        ),
         "selected_fruit_wood_clearance_m": (
             adapter.wood_clearance(
                 tree,
                 fruit,
             )
         ),
-        "collision_mode": collision_mode,
-        "collision": collision_description,
+        "collision_mode": (
+            collision_mode
+        ),
+        "collision": (
+            collision_description
+        ),
         "collider_branch_count": len(
             collider_branch_ids
         ),
@@ -538,7 +656,10 @@ def build(
         "dynamic_fruit_count": 1,
     }
 
-    (output / "manifest.json").write_text(
+    (
+        output
+        / "manifest.json"
+    ).write_text(
         json.dumps(
             manifest,
             indent=2,
@@ -554,28 +675,28 @@ def build(
     )
 
 
-if __name__ == "__main__":
-    p = argparse.ArgumentParser(
+def make_parser():
+    parser = argparse.ArgumentParser(
         description=__doc__,
     )
 
-    p.add_argument(
+    parser.add_argument(
         "--tree",
         type=Path,
         required=True,
     )
 
-    p.add_argument(
+    parser.add_argument(
         "--output",
         type=Path,
         required=True,
     )
 
-    p.add_argument(
+    parser.add_argument(
         "--fruit-id",
     )
 
-    p.add_argument(
+    parser.add_argument(
         "--collision-mode",
         choices=(
             "none",
@@ -587,22 +708,22 @@ if __name__ == "__main__":
             "Tree collision representation. "
             "'none' disables branch colliders; "
             "'coarse' excludes small twigs; "
-            "'all' preserves the old behavior."
+            "'all' preserves the original collider behavior."
         ),
     )
 
-    p.add_argument(
+    parser.add_argument(
         "--min-collider-radius-m",
         type=float,
         default=DEFAULT_MIN_COLLIDER_RADIUS_M,
         help=(
             "For --collision-mode coarse, skip branch "
-            "segments whose maximum radius is below "
-            "this value."
+            "segments whose maximum endpoint radius is "
+            "below this value."
         ),
     )
 
-    p.add_argument(
+    parser.add_argument(
         "--min-collider-length-m",
         type=float,
         default=DEFAULT_MIN_COLLIDER_LENGTH_M,
@@ -612,17 +733,96 @@ if __name__ == "__main__":
         ),
     )
 
-    a = p.parse_args()
+    return parser
 
-    build(
-        tree_path=a.tree,
-        output=a.output,
-        fruit_id=a.fruit_id,
-        collision_mode=a.collision_mode,
-        min_collider_radius_m=(
-            a.min_collider_radius_m
-        ),
-        min_collider_length_m=(
-            a.min_collider_length_m
-        ),
-    )
+
+def main():
+    #
+    # Blender/local USD Python already exposes pxr.
+    #
+    # Songkhla's Conda environment does not expose pxr until the Isaac/Kit
+    # application has initialized its extension/runtime paths.
+    #
+    try:
+        import pxr  # noqa: F401
+
+        pxr_already_available = True
+
+    except ModuleNotFoundError:
+        pxr_already_available = False
+
+    app = None
+
+    parser = make_parser()
+
+    if not pxr_already_available:
+        from isaaclab.app import AppLauncher
+
+        AppLauncher.add_app_launcher_args(
+            parser
+        )
+
+    args = parser.parse_args()
+
+    if (
+        args.min_collider_radius_m
+        <= 0.0
+    ):
+        parser.error(
+            "--min-collider-radius-m must be > 0"
+        )
+
+    if (
+        args.min_collider_length_m
+        <= 0.0
+    ):
+        parser.error(
+            "--min-collider-length-m must be > 0"
+        )
+
+    try:
+        if not pxr_already_available:
+            #
+            # Match the existing project's Isaac-side asset scripts:
+            # initialize a minimal headless Kit application before importing
+            # USD/PXR modules.
+            #
+            args.headless = True
+            args.enable_cameras = False
+            args.experience = str(
+                PROJECT
+                / "configs/ycb.python.headless.kit"
+            )
+
+            app = AppLauncher(
+                args
+            ).app
+
+            #
+            # Explicitly verify that initialization made pxr available.
+            #
+            from pxr import Usd  # noqa: F401
+
+        build(
+            tree_path=args.tree,
+            output=args.output,
+            fruit_id=args.fruit_id,
+            collision_mode=(
+                args.collision_mode
+            ),
+            min_collider_radius_m=(
+                args.min_collider_radius_m
+            ),
+            min_collider_length_m=(
+                args.min_collider_length_m
+            ),
+        )
+
+    finally:
+        if app is not None:
+            app.close()
+
+
+if __name__ == "__main__":
+    main()
+PY
