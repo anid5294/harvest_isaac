@@ -37,7 +37,7 @@ from isaaclab.app import AppLauncher
 def parse_args():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--task", default="VLA-ScenePreview-YCB-G1-v0", help="Registered Gym environment ID.")
-    parser.add_argument("--policy", choices=("auto", "standing", "sugar-box", "orchard"), default="auto")
+    parser.add_argument("--policy", choices=("auto", "standing", "sugar-box", "orchard", "pick-place", "cpu-harvest"), default="auto")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--report-dir", type=Path, help="Save this run's validation.json in a separate directory.")
     parser.add_argument("--steps", type=int, default=300, help="Control steps; 0 keeps a GUI run open.")
@@ -120,12 +120,23 @@ def make_policy(env):
     selected = ARGS.policy
     if selected == "auto":
         selected = {"VLA-YCBSugarBox-G1-JointPos-v0": "sugar-box",
+                    "VLA-FreeApplePickPlace-G1-JointPos-v0": "pick-place",
                     "VLA-OrchardPick-G1-JointPos-v0": "orchard"}.get(ARGS.task, "standing")
         if selected == "orchard" and env.cfg.orchard_layout.tree_model in ("commercial", "orchardbench"):
             # The old grasp script is not a verified controller for this tree.
             # This milestone defaults to a stable scene for an external controller.
             selected = "standing"
             print("[INFO] Commercial tree: auto selects standing; no trained harvesting policy is bundled.")
+    if selected == "pick-place":
+        if ARGS.task != "VLA-FreeApplePickPlace-G1-JointPos-v0":
+            raise ValueError("pick-place policy requires the free-apple demo task")
+        from vla_isaaclab.policies.scripted_pick_place import FreePickPlaceScriptedPolicy
+        return FreePickPlaceScriptedPolicy(env)
+    if selected == "cpu-harvest":
+        if ARGS.task != "VLA-OrchardPick-G1-JointPos-v0" or ARGS.device != "cpu":
+            raise ValueError("cpu-harvest requires the orchard-pick task on --device cpu")
+        from vla_isaaclab.policies.cpu_harvest import CPUHarvestScriptedPolicy
+        return CPUHarvestScriptedPolicy(env)
     if selected == "orchard":
         from vla_isaaclab.policies.orchard_pick import OrchardScriptedPolicy
         return OrchardScriptedPolicy(env)
@@ -251,10 +262,19 @@ def validate(env, policy, steps, success_count, dataset_path=None):
     }
     if hasattr(policy, "diagnostics"):
         report["policy"] = policy.diagnostics()
+    if ARGS.task == "VLA-FreeApplePickPlace-G1-JointPos-v0":
+        report["free_pick_place"] = {
+            "metrics": getattr(env, "free_pick_place_metrics", {}),
+            "camera_profile": env.cfg.camera_profile,
+            "physics_device": str(env.device),
+            "native_stem_present": False,
+            "harvest_success_claim": False,
+        }
     if hasattr(env.cfg, "orchard_layout"):
         report["orchard"] = {
             "layout": env.cfg.orchard_layout.metadata(),
             "metrics": getattr(env, "orchard_last_metrics", {}),
+            "physics_device": str(env.device),
             "fixed_base": True,
             "camera_videos": str(ARGS.camera_videos) if ARGS.camera_videos else None,
             "camera_profile": env.cfg.camera_profile,
@@ -298,6 +318,10 @@ def main() -> int:
     module_name, config_name = gym.spec(ARGS.task).kwargs["env_cfg_entry_point"].split(":")
     cfg = getattr(importlib.import_module(module_name), config_name)()
     cfg.sim.device = ARGS.device
+    if ARGS.task == "VLA-FreeApplePickPlace-G1-JointPos-v0" and ARGS.device != "cpu":
+        raise ValueError("The free-apple validation demo currently requires --device cpu")
+    if ARGS.policy == "cpu-harvest" and (ARGS.task != "VLA-OrchardPick-G1-JointPos-v0" or ARGS.device != "cpu"):
+        raise ValueError("--policy cpu-harvest requires --task VLA-OrchardPick-G1-JointPos-v0 --device cpu")
     cfg.scene.num_envs = 1
     cfg.seed = ARGS.seed
     if ARGS.task == "VLA-OrchardPick-G1-JointPos-v0":
@@ -383,6 +407,7 @@ def main() -> int:
             task_prompt = ARGS.task_prompt or cfg.task_instruction
             is_sugar = ARGS.task == "VLA-YCBSugarBox-G1-JointPos-v0"
             is_orchard = ARGS.task == "VLA-OrchardPick-G1-JointPos-v0"
+            is_free_pick = ARGS.task == "VLA-FreeApplePickPlace-G1-JointPos-v0"
             collection = {
                 "contract_version": "1.0",
                 "dataset_profile": "g1_29body_dex3_43d_v1",
@@ -469,6 +494,34 @@ def main() -> int:
                     "src/vla_isaaclab/policies/orchard_pick.py",
                     "src/vla_isaaclab/policies/ycb_sugar_box.py",
                     "src/vla_isaaclab/envs/orchard_pick/env_cfg.py",
+                ]
+                if ARGS.policy == "cpu-harvest":
+                    collection["physics_device"] = str(env.device)
+                    collection["controllers"]["arms_and_hands"] = (
+                        "CPU contact-driven attached-apple FSM with existing bounded-DLS IK")
+                    collection["controllers"]["configuration_reference"][0] = (
+                        "src/vla_isaaclab/policies/cpu_harvest.py")
+            if is_free_pick:
+                collection.update({
+                    "camera_profile": cfg.camera_profile,
+                    "camera_semantics": "fixed external view plus two wrist cameras",
+                    "contract_exceptions": [],
+                    "physics_device": str(env.device),
+                    "native_stem_present": False,
+                    "harvest_success_claim": False,
+                    "task_success_criteria": (
+                        "Measured opposing-finger grasp, lift and sustained carry, release, "
+                        "physical basket floor support and low-speed placement; named success termination"
+                    ),
+                    "held_and_moving_groups": {
+                        "held": ["legs", "waist roll/pitch", "right arm", "right hand"],
+                        "moving": ["waist yaw", "left arm", "left hand"],
+                    },
+                })
+                collection["controllers"]["arms_and_hands"] = "state/contact-driven pick-place FSM with bounded-DLS IK"
+                collection["controllers"]["configuration_reference"] = [
+                    "src/vla_isaaclab/policies/scripted_pick_place.py",
+                    "src/vla_isaaclab/envs/free_pick_place/env_cfg.py",
                 ]
             writer = StagingHDF5Writer(
                 root=PROJECT_ROOT / "outputs/lerobot_staging",
@@ -569,6 +622,10 @@ def main() -> int:
         if hasattr(env, "orchard_trace"):
             (output_dir / "trajectory.jsonl").write_text(
                 "".join(json.dumps(row) + "\n" for row in env.orchard_trace)
+            )
+        if hasattr(env, "free_pick_place_trace"):
+            (output_dir / "trajectory.jsonl").write_text(
+                "".join(json.dumps(row) + "\n" for row in env.free_pick_place_trace)
             )
         print(json.dumps(report, indent=2), flush=True)
         return 0 if report["passed"] else 2

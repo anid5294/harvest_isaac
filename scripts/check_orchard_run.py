@@ -49,6 +49,7 @@ def check_videos(directory, expected_frames, camera_profile=None):
     names = (("external", "left_wrist", "right_wrist")
              if camera_profile in ("orchard_fixed_front_top_three_view_v1",
                                    "orchardbench_single_tree_three_view_v1",
+                                   "free_pick_place_three_view_v1",
                                    "orchard_commercial_full_tree_three_view_v1")
              else ("external", "head", "left_wrist", "right_wrist"))
     for name in names:
