@@ -601,4 +601,9 @@ if __name__ == "__main__":
         except SystemExit:
             pass
         print("[TEARDOWN] after APP.close()", flush=True)
-    raise SystemExit(exit_code)
+
+        # Kit/Isaac has already been explicitly closed. Avoid a second round
+        # of native-extension destruction during Python interpreter shutdown.
+        sys.stdout.flush()
+        sys.stderr.flush()
+        os._exit(exit_code)
