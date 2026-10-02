@@ -580,7 +580,10 @@ def main() -> int:
                 video_container.mux(packet)
         if video_container is not None:
             video_container.close()
+
+        print("[TEARDOWN] before env.close()", flush=True)
         env.close()
+        print("[TEARDOWN] after env.close()", flush=True)
 
 
 if __name__ == "__main__":
@@ -591,8 +594,11 @@ if __name__ == "__main__":
         traceback.print_exc()
     finally:
         write_exit_status(exit_code)
+
+        print("[TEARDOWN] before APP.close()", flush=True)
         try:
             APP.close()
         except SystemExit:
             pass
+        print("[TEARDOWN] after APP.close()", flush=True)
     raise SystemExit(exit_code)
