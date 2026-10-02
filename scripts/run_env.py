@@ -45,8 +45,10 @@ def parse_args():
     parser.add_argument("--camera-videos", type=Path, help="New directory for profile-specific H.264 camera inspection videos.")
     parser.add_argument("--orchard-tree-asset", type=Path,
                         help="Prepared visual tree directory (tree.usda and manifest.json); active orchard only.")
-    parser.add_argument("--orchard-tree-model", choices=("commercial", "legacy"), default="commercial",
-                        help="Commercial physical tree (default) or old three-apple calibration fixture.")
+    parser.add_argument("--orchardbench-asset", type=Path,
+                        help="Compiled canonical tree directory; requires --orchard-tree-model orchardbench.")
+    parser.add_argument("--orchard-tree-model", choices=("commercial", "legacy", "orchardbench"), default="orchardbench",
+                        help="Pinned OrchardBench tree (default), rejected commercial prototype, or legacy calibration fixture.")
     parser.add_argument("--record-format", choices=("none", "hdf5", "lerobot"), default="none")
     parser.add_argument(
         "--lerobot-version", choices=("3", "2.1"), default="3",
@@ -119,7 +121,7 @@ def make_policy(env):
     if selected == "auto":
         selected = {"VLA-YCBSugarBox-G1-JointPos-v0": "sugar-box",
                     "VLA-OrchardPick-G1-JointPos-v0": "orchard"}.get(ARGS.task, "standing")
-        if selected == "orchard" and env.cfg.orchard_layout.tree_model == "commercial":
+        if selected == "orchard" and env.cfg.orchard_layout.tree_model in ("commercial", "orchardbench"):
             # The old grasp script is not a verified controller for this tree.
             # This milestone defaults to a stable scene for an external controller.
             selected = "standing"
@@ -302,6 +304,10 @@ def main() -> int:
         if ARGS.episodes != 1:
             raise ValueError("Run one orchard seed per process; stem resets and batch collection need lab validation")
         cfg.tree_model = ARGS.orchard_tree_model
+        if ARGS.orchardbench_asset:
+            if cfg.tree_model != "orchardbench":
+                raise ValueError("--orchardbench-asset requires --orchard-tree-model orchardbench")
+            cfg.external_tree_asset = str(ARGS.orchardbench_asset.resolve())
         cfg.configure_layout(ARGS.seed)
         if ARGS.orchard_tree_asset:
             if cfg.tree_model != "legacy":

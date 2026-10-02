@@ -21,6 +21,7 @@ ORCHARD_THREE_VIEW_PROFILE = "orchard_fixed_front_top_three_view_v1"
 ORCHARD_COMMERCIAL_THREE_VIEW_PROFILE = "orchard_commercial_full_tree_three_view_v1"
 ORCHARD_THREE_VIEW_PROFILES = (
     ORCHARD_THREE_VIEW_PROFILE, ORCHARD_COMMERCIAL_THREE_VIEW_PROFILE,
+    "orchardbench_single_tree_three_view_v1",
 )
 
 

@@ -1,0 +1,39 @@
+# Camera render products without an explicitly requested viewport RTX extension.
+# Experimental Sim 4.5 startup profile: test render_smoke before the orchard.
+[package]
+title = "Orchard sensor-only headless rendering"
+version = "1.0.0"
+
+[dependencies]
+"ycb.python.headless" = {}
+"omni.hydra.rtx" = {}
+"omni.replicator.core" = {}
+"omni.kit.material.library" = {}
+
+[settings]
+isaaclab.cameras_enabled = true
+app.window.enabled = false
+app.window.hideUi = true
+app.audio.enabled = false
+app.asyncRendering = false
+app.renderer.waitIdle = true
+app.hydraEngine.waitIdle = true
+app.updateOrder.checkForHydraRenderComplete = 1000
+app.settings.persistent = false
+renderer.multiGpu.enabled = false
+renderer.multiGpu.autoEnable = false
+renderer.multiGpu.maxGpuCount = 1
+omni.replicator.asyncRendering = false
+exts."omni.renderer.core".present.enabled = false
+exts."omni.replicator.core".Orchestrator.enabled = false
+rtx.post.dlss.execMode = 0
+
+[settings.app.exts]
+folders = [
+    "${exe-path}/exts", "${exe-path}/extscore", "${exe-path}/../exts",
+    "${exe-path}/../extscache", "${exe-path}/../extsPhysics",
+    "${exe-path}/../extsDeprecated", "${exe-path}/../isaacsim/exts",
+    "${exe-path}/../isaacsim/extscache", "${exe-path}/../isaacsim/extsPhysics",
+    "${exe-path}/../isaacsim/extsDeprecated", "${app}",
+    "${env:ISAACLAB_ROOT}/source",
+]

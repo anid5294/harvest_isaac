@@ -1,5 +1,7 @@
 """Physical fruit, breakable stems, supported basket, and three RGB views."""
 
+from pathlib import Path
+
 import isaaclab.envs.mdp as base_mdp
 import isaaclab.sim as sim_utils
 from isaaclab.assets import RigidObjectCfg
@@ -75,7 +77,9 @@ class OrchardPickEnvCfg(VLAEnvCfg):
     camera_target: tuple = LOOKAT
     camera_profile: str = CAMERA_PROFILE
     orchard_seed: int = 42
-    tree_model: str = "commercial"
+    tree_model: str = "orchardbench"
+    external_tree_asset: str | None = str(
+        Path(__file__).resolve().parents[4] / "assets/orchard/orchardbench_seed42/isaac")
     commercial_tree_summary: dict | None = None
     grasp_offset: tuple = (-0.065, -0.085, 0.035)
 
@@ -85,9 +89,16 @@ class OrchardPickEnvCfg(VLAEnvCfg):
 
     def configure_layout(self, seed):
         self.orchard_seed = seed
-        layout = make_layout(seed, tree_model=self.tree_model)
+        if self.tree_model == "orchardbench":
+            from .external_tree import load_asset
+            if not self.external_tree_asset:
+                raise ValueError("OrchardBench requires a prepared --orchardbench-asset")
+            layout, external_usd, external_manifest = load_asset(self.external_tree_asset, seed)
+        else:
+            layout = make_layout(seed, tree_model=self.tree_model)
         self.orchard_layout = layout
         scene = self.scene
+        scene.robot = make_g1_cfg((0.0, -0.72, 0.80))
         for name in getattr(self, "_orchard_scene_names", ()):
             if hasattr(scene, name):
                 delattr(scene, name)
@@ -97,7 +108,21 @@ class OrchardPickEnvCfg(VLAEnvCfg):
             setattr(scene, name, asset)
             self._orchard_scene_names.append(name)
 
-        if self.tree_model == "commercial":
+        if self.tree_model == "orchardbench":
+            from isaaclab.assets import AssetBaseCfg
+            add_asset("external_tree", AssetBaseCfg(
+                prim_path="{ENV_REGEX_NS}/OrchardBenchTree",
+                spawn=sim_utils.UsdFileCfg(usd_path=str(external_usd)),
+            ))
+            # Move the robot, never the morphology. This is only a candidate
+            # stance: reachability and body/branch clearance need lab review.
+            x, y, _ = layout.target
+            scene.robot = make_g1_cfg((x+0.10, y-0.43, 0.80))
+            self.commercial_tree_summary = external_manifest
+            self.camera_eye = (3.4, 4.0, 3.2)
+            self.camera_target = (0.0, -0.15, 1.2)
+            self.camera_profile = "orchardbench_single_tree_three_view_v1"
+        elif self.tree_model == "commercial":
             from .commercial_scene import add_commercial_tree
 
             tree = add_commercial_tree(scene, seed, add_asset)
