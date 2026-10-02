@@ -38,6 +38,10 @@ def parse_args():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--task", default="VLA-ScenePreview-YCB-G1-v0", help="Registered Gym environment ID.")
     parser.add_argument("--policy", choices=("auto", "standing", "sugar-box", "orchard", "pick-place", "cpu-harvest"), default="auto")
+    parser.add_argument("--cpu-harvest-diagnostics", action="store_true",
+                        help="CPU orchard contact-pair/substep and detailed control evidence.")
+    parser.add_argument("--cpu-harvest-orientation-weight", type=float, default=0.20,
+                        help="CPU harvest pose-IK orientation weight; default preserves baseline.")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--report-dir", type=Path, help="Save this run's validation.json in a separate directory.")
     parser.add_argument("--steps", type=int, default=300, help="Control steps; 0 keeps a GUI run open.")
@@ -322,6 +326,12 @@ def main() -> int:
         raise ValueError("The free-apple validation demo currently requires --device cpu")
     if ARGS.policy == "cpu-harvest" and (ARGS.task != "VLA-OrchardPick-G1-JointPos-v0" or ARGS.device != "cpu"):
         raise ValueError("--policy cpu-harvest requires --task VLA-OrchardPick-G1-JointPos-v0 --device cpu")
+    if ARGS.cpu_harvest_diagnostics and (ARGS.task != "VLA-OrchardPick-G1-JointPos-v0" or ARGS.device != "cpu"):
+        raise ValueError("--cpu-harvest-diagnostics requires the orchard task on CPU")
+    if not 0.0 < ARGS.cpu_harvest_orientation_weight <= 1.0:
+        raise ValueError("CPU harvest orientation weight must be in (0, 1]")
+    cfg.cpu_harvest_diagnostics = ARGS.cpu_harvest_diagnostics
+    cfg.cpu_harvest_orientation_weight = ARGS.cpu_harvest_orientation_weight
     cfg.scene.num_envs = 1
     cfg.seed = ARGS.seed
     if ARGS.task == "VLA-OrchardPick-G1-JointPos-v0":
@@ -554,6 +564,8 @@ def main() -> int:
                             snapshot = adapter.capture(reference_time_ns)
                             action = policy.compute(episode_step)
                             _, reward, terminated, timed_out, _ = env.step(action)
+                            if hasattr(policy, "observe_after_step"):
+                                policy.observe_after_step()
                             if camera_videos is not None:
                                 camera_videos.write()
                             step_succeeded = task_succeeded(env) and not getattr(policy, "failed", False)
@@ -597,6 +609,8 @@ def main() -> int:
                 while APP.is_running() and (ARGS.steps == 0 or steps < ARGS.steps):
                     action = policy.compute(steps)
                     _, _, terminated, timed_out, _ = env.step(action)
+                    if hasattr(policy, "observe_after_step"):
+                        policy.observe_after_step()
                     if camera_videos is not None:
                         camera_videos.write()
                     if video_stream is not None:
@@ -619,6 +633,14 @@ def main() -> int:
         output_dir = ARGS.report_dir or PROJECT_ROOT / "outputs/environments" / ARGS.task
         output_dir.mkdir(parents=True, exist_ok=True)
         (output_dir / "validation.json").write_text(json.dumps(report, indent=2) + "\n")
+        if hasattr(policy, "control_trace"):
+            (output_dir / "control_trace.jsonl").write_text(
+                "".join(json.dumps(row) + "\n" for row in policy.control_trace)
+            )
+        if ARGS.cpu_harvest_diagnostics:
+            (output_dir / "physics_diagnostics.json").write_text(
+                json.dumps(env.orchard_physics_diagnostics(), indent=2) + "\n"
+            )
         if hasattr(env, "orchard_trace"):
             (output_dir / "trajectory.jsonl").write_text(
                 "".join(json.dumps(row) + "\n" for row in env.orchard_trace)
