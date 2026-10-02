@@ -28,7 +28,7 @@ def check(report, passive=False):
             errors.append("Fruit detached or failed to settle during passive hold")
         if metrics.get("detached_indices"):
             errors.append("One or more fruit stems broke during passive hold")
-        if layout.get("tree_model") == "commercial":
+        if layout.get("tree_model") in ("commercial", "orchardbench"):
             for index, initial_position in enumerate(layout.get("apples", [])):
                 name = "object" if index == layout.get("target_index", 0) else f"apple_{index}"
                 state = report.get("rigid_objects", {}).get(name, {})
@@ -48,6 +48,7 @@ def check_videos(directory, expected_frames, camera_profile=None):
     errors = []
     names = (("external", "left_wrist", "right_wrist")
              if camera_profile in ("orchard_fixed_front_top_three_view_v1",
+                                   "orchardbench_single_tree_three_view_v1",
                                    "orchard_commercial_full_tree_three_view_v1")
              else ("external", "head", "left_wrist", "right_wrist"))
     for name in names:

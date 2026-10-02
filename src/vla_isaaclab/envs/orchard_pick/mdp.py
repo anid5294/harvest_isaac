@@ -86,7 +86,7 @@ def update_metrics(env):
     detached = layout.target_index in env.orchard_broken
     if env.orchard_broken - {layout.target_index}:
         env.orchard_failure = "non_target_apple_detached"
-    measured_task = layout.tree_model == "commercial"
+    measured_task = layout.tree_model in ("commercial", "orchardbench")
     if detached and not measured_task and not env.orchard_pull_started:
         env.orchard_failure = "premature_stem_break"
     lifted = detached and position[2] > layout.target[2] + 0.06 and hand_distance < 0.18
