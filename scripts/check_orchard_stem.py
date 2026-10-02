@@ -177,7 +177,11 @@ def main():
 
 
 if __name__ == "__main__":
+    exit_code = 1
     try:
-        raise SystemExit(main())
+        exit_code = main()
     finally:
         APP.close()
+        sys.stdout.flush()
+        sys.stderr.flush()
+        os._exit(exit_code)
