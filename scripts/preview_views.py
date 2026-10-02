@@ -6,6 +6,7 @@ from pathlib import Path
 def camera_views(profile=None):
     if profile in ("orchard_fixed_front_top_three_view_v1",
                    "orchardbench_single_tree_three_view_v1",
+                   "free_pick_place_three_view_v1",
                    "orchard_commercial_full_tree_three_view_v1"):
         return (("cam_left_high", "external"), ("cam_left_wrist", "left_wrist"),
                 ("cam_right_wrist", "right_wrist"))
