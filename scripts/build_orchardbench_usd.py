@@ -1,4 +1,3 @@
-cat > scripts/build_orchardbench_usd.py <<'PY'
 #!/usr/bin/env python3
 """Compile canonical OrchardBench tree to metre/Z-up USD.
 
@@ -825,4 +824,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-PY
