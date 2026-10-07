@@ -43,6 +43,11 @@ def parse_args():
     parser.add_argument("--cpu-harvest-orientation-weight", type=float, default=0.20,
                         help="CPU harvest pose-IK orientation weight; default preserves baseline.")
     parser.add_argument("--seed", type=int, default=42)
+    orchard_input = parser.add_mutually_exclusive_group()
+    orchard_input.add_argument("--orchard-seed", type=int, help="Opt-in deterministic multi-tree orchard seed.")
+    orchard_input.add_argument("--orchard-spec", type=Path, help="Replay a saved orchard_spec.json.")
+    parser.add_argument("--orchard-pool", type=Path, default=PROJECT_ROOT / "outputs/orchardbench/tree_pool",
+                        help="Offline prepared tree pool; never generated during simulation startup.")
     parser.add_argument("--report-dir", type=Path, help="Save this run's validation.json in a separate directory.")
     parser.add_argument("--steps", type=int, default=300, help="Control steps; 0 keeps a GUI run open.")
     parser.add_argument("--preview-video", type=Path)
@@ -285,6 +290,7 @@ def validate(env, policy, steps, success_count, dataset_path=None):
             "tree_asset": getattr(env.cfg, "tree_asset_metadata", None),
             "tree_model": env.cfg.orchard_layout.tree_model,
             "tree_structure": getattr(env.cfg, "commercial_tree_summary", None),
+            "orchard_spec": getattr(env.cfg, "orchard_spec", None),
         }
     if "success" in env.termination_manager.active_terms:
         report["passed"] = bool(
@@ -334,6 +340,21 @@ def main() -> int:
     cfg.cpu_harvest_orientation_weight = ARGS.cpu_harvest_orientation_weight
     cfg.scene.num_envs = 1
     cfg.seed = ARGS.seed
+    if ARGS.orchard_seed is not None or ARGS.orchard_spec is not None:
+        if ARGS.task != "VLA-OrchardPick-G1-JointPos-v0" or ARGS.orchard_tree_model != "orchardbench":
+            raise ValueError("OrchardSpec is supported only by the OrchardBench orchard-pick task")
+        if ARGS.orchardbench_asset or ARGS.orchard_tree_asset:
+            raise ValueError("Use an orchard pool, not a single-tree asset override, with OrchardSpec")
+        from vla_isaaclab.envs.orchard_pick.orchard_generation import generate_orchard_spec, validate_spec
+        spec = (json.loads(ARGS.orchard_spec.read_text()) if ARGS.orchard_spec else
+                generate_orchard_spec(ARGS.orchard_pool, ARGS.orchard_seed))
+        validate_spec(spec, ARGS.orchard_pool)
+        cfg.orchard_spec, cfg.orchard_pool = spec, str(ARGS.orchard_pool.resolve())
+        cfg.seed = spec["seed"]
+        # Keep the exact accepted input even if Kit/scene initialization fails.
+        spec_output = ARGS.report_dir or PROJECT_ROOT / "outputs/environments" / ARGS.task
+        spec_output.mkdir(parents=True, exist_ok=True)
+        (spec_output / "orchard_spec.json").write_text(json.dumps(spec, indent=2) + "\n")
     if ARGS.task == "VLA-OrchardPick-G1-JointPos-v0":
         if ARGS.episodes != 1:
             raise ValueError("Run one orchard seed per process; stem resets and batch collection need lab validation")
@@ -383,7 +404,7 @@ def main() -> int:
     video_stream = None
     camera_videos = None
     try:
-        env.reset(seed=ARGS.seed)
+        env.reset(seed=cfg.seed)
         if ARGS.camera_videos:
             from preview_views import PreviewViews
             camera_videos = PreviewViews(env, ARGS.camera_videos)
@@ -556,7 +577,7 @@ def main() -> int:
                 with torch.inference_mode():
                     for episode_index in range(ARGS.episodes):
                         if episode_index:
-                            env.reset(seed=ARGS.seed + episode_index)
+                            env.reset(seed=cfg.seed + episode_index)
                             policy = make_policy(env)
                         episode_succeeded = False
                         for episode_step in range(finite_steps):
@@ -577,7 +598,7 @@ def main() -> int:
                                     timed_out,
                                     episode_step + 1 == finite_steps,
                                     task_prompt,
-                                    ARGS.seed + episode_index,
+                                    cfg.seed + episode_index,
                                     step_succeeded,
                                 )
                             )
@@ -632,6 +653,8 @@ def main() -> int:
         report = validate(env, policy, steps, success_count, dataset_path)
         output_dir = ARGS.report_dir or PROJECT_ROOT / "outputs/environments" / ARGS.task
         output_dir.mkdir(parents=True, exist_ok=True)
+        if getattr(cfg, "orchard_spec", None) is not None:
+            (output_dir / "orchard_spec.json").write_text(json.dumps(cfg.orchard_spec, indent=2) + "\n")
         (output_dir / "validation.json").write_text(json.dumps(report, indent=2) + "\n")
         if hasattr(policy, "control_trace"):
             (output_dir / "control_trace.jsonl").write_text(

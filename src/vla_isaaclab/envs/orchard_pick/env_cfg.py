@@ -82,6 +82,8 @@ class OrchardPickEnvCfg(VLAEnvCfg):
         Path(__file__).resolve().parents[4] / "assets/orchard/orchardbench_seed42/isaac")
     commercial_tree_summary: dict | None = None
     grasp_offset: tuple = (-0.065, -0.085, 0.035)
+    orchard_spec: dict | None = None
+    orchard_pool: str | None = None
 
     def __post_init__(self):
         super().__post_init__()
@@ -89,7 +91,13 @@ class OrchardPickEnvCfg(VLAEnvCfg):
 
     def configure_layout(self, seed):
         self.orchard_seed = seed
-        if self.tree_model == "orchardbench":
+        if self.orchard_spec is not None:
+            if self.tree_model != "orchardbench" or not self.orchard_pool:
+                raise ValueError("OrchardSpec requires orchardbench and an offline prepared pool")
+            from .orchard_scene import physical_layout
+            layout, external_usd, external_manifest = physical_layout(self.orchard_spec, self.orchard_pool)
+            self.orchard_seed = self.orchard_spec["seed"]
+        elif self.tree_model == "orchardbench":
             from .external_tree import load_asset
             if not self.external_tree_asset:
                 raise ValueError("OrchardBench requires a prepared --orchardbench-asset")
@@ -114,6 +122,11 @@ class OrchardPickEnvCfg(VLAEnvCfg):
                 prim_path="{ENV_REGEX_NS}/OrchardBenchTree",
                 spawn=sim_utils.UsdFileCfg(usd_path=str(external_usd)),
             ))
+            if self.orchard_spec is not None:
+                from .orchard_scene import selected_tree, yaw_quaternion
+                tree = selected_tree(self.orchard_spec)
+                scene.external_tree.init_state.pos = tuple(tree["position"])
+                scene.external_tree.init_state.rot = yaw_quaternion(tree["yaw_deg"])
             # Move the robot, never the morphology. This is only a candidate
             # stance: reachability and body/branch clearance need lab review.
             x, y, _ = layout.target
@@ -186,3 +199,6 @@ class OrchardPickEnvCfg(VLAEnvCfg):
             ((0.32, 0.02, 0.10), (x, y+0.14, z+0.06)),
         )):
             add_asset(f"wall_{i}", _static_box(f"BasketWall_{i}", size, position, blue))
+        if self.orchard_spec is not None:
+            from .orchard_scene import populate
+            populate(self, add_asset)
