@@ -52,7 +52,10 @@ class CPUHarvestStrategy:
     def _set_geometry(self):
         grasp = self.apple.data.root_pos_w + self._tensor(self.env.cfg.grasp_offset)
         self.waypoints = {
-            "pregrasp": grasp + self._tensor((0.0, -0.12, 0.08)),
+            # Seed-42 contact trace: the elevated pregrasp hits branch B124
+            # before closure, then B120. Test entry from below instead; keep
+            # the final grasp pose and all measured physical gates unchanged.
+            "pregrasp": grasp + self._tensor((0.0, -0.12, -0.08)),
             "approach": grasp,
             "close": grasp,
             "verify_grasp": grasp,
