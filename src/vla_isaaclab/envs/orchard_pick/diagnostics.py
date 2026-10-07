@@ -76,7 +76,7 @@ def install(env):
         api = PhysxSchema.PhysxContactReportAPI.Apply(stage.GetPrimAtPath(path))
         if not api:
             raise RuntimeError(f"CPU orchard diagnostics: contact API failed on {path}")
-        api.CreatePhysxContactReportThresholdAttr().Set(0.0)
+        api.CreateThresholdAttr().Set(0.0)
 
     buffer = PhysicsDiagnostics()
 

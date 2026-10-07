@@ -1,6 +1,9 @@
 import importlib.util
 from pathlib import Path
+import sys
+from types import ModuleType, SimpleNamespace
 import unittest
+from unittest.mock import patch
 
 
 spec = importlib.util.spec_from_file_location(
@@ -54,6 +57,53 @@ class PhysicsDiagnosticsTests(unittest.TestCase):
         buffer.callback_error = "ValueError('bad native callback')"
         with self.assertRaisesRegex(RuntimeError, "bad native callback"):
             buffer.snapshot()
+
+    def test_install_uses_native_threshold_attr_and_retains_subscriptions(self):
+        threshold_values = []
+
+        class Prim:
+            def IsValid(self):
+                return True
+
+        class Stage:
+            def GetPrimAtPath(self, path):
+                return Prim()
+
+        class ContactReportAPI:
+            def CreateThresholdAttr(self):
+                return SimpleNamespace(Set=threshold_values.append)
+
+        contact_subscription = object()
+        step_subscription = object()
+        simulation_interface = SimpleNamespace(
+            subscribe_contact_report_events=lambda callback: contact_subscription)
+        physics_interface = SimpleNamespace(
+            subscribe_physics_step_events=lambda callback: step_subscription)
+
+        omni = ModuleType("omni")
+        omni.__path__ = []
+        omni.physx = SimpleNamespace(
+            get_physx_simulation_interface=lambda: simulation_interface,
+            get_physx_interface=lambda: physics_interface)
+        omni.usd = SimpleNamespace(
+            get_context=lambda: SimpleNamespace(get_stage=lambda: Stage()))
+        pxr = ModuleType("pxr")
+        pxr.PhysicsSchemaTools = SimpleNamespace(intToSdfPath=str)
+        pxr.PhysxSchema = SimpleNamespace(
+            PhysxContactReportAPI=SimpleNamespace(Apply=lambda prim: ContactReportAPI()))
+        pxr.Usd = SimpleNamespace(PrimRange=lambda prim: ())
+        pxr.UsdPhysics = SimpleNamespace(RigidBodyAPI=object())
+        env = SimpleNamespace(
+            scene=SimpleNamespace(env_prim_paths=["/World/envs/env_0"]),
+            cfg=SimpleNamespace(orchard_layout=SimpleNamespace(apples=[object()])))
+
+        with patch.dict(sys.modules, {"omni": omni, "omni.physx": omni.physx,
+                                     "omni.usd": omni.usd, "pxr": pxr}):
+            diagnostics.install(env)
+
+        self.assertEqual(threshold_values, [0.0, 0.0])
+        self.assertIs(env._orchard_contact_report_subscription, contact_subscription)
+        self.assertIs(env._orchard_physics_step_subscription, step_subscription)
 
 
 if __name__ == "__main__":
