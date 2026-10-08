@@ -8,6 +8,7 @@ from isaaclab.utils.math import quat_error_magnitude, quat_slerp
 from vla_isaaclab.envs.common.g1 import LEFT_END_EFFECTOR
 from vla_isaaclab.envs.common.managers import ACTION_TERM_NAME
 from .cpu_harvest_fsm import HarvestFSM, PHASES
+from .cpu_harvest_grasp import CLOSED_HAND_RAD
 from .ycb_sugar_box import YCBSugarBoxScriptedPolicy
 from .ycb_sugar_box_strategy import EndEffectorTarget, SugarBoxPhaseStrategy
 
@@ -185,6 +186,12 @@ class CPUHarvestScriptedPolicy(YCBSugarBoxScriptedPolicy):
 
     def __init__(self, env):
         super().__init__(env, strategy=CPUHarvestStrategy(env))
+        # This USD's left index/middle joints close in the negative direction.
+        # The inherited positive sugar-box targets clamp at the open limit.
+        # Do not change that separately calibrated task's shared constants.
+        self.grip_closure_scale = 1.0
+        self.closed_hand = self.open_hand.new_tensor([
+            [CLOSED_HAND_RAD[name] for name in self.hand_joint_names]])
         self.orientation_weight = float(getattr(env.cfg, "cpu_harvest_orientation_weight", 0.20))
         if not 0.0 <= self.orientation_weight <= 1.0 or not math.isfinite(self.orientation_weight):
             raise ValueError("cpu_harvest_orientation_weight must be finite and in [0, 1]")
@@ -260,6 +267,9 @@ class CPUHarvestScriptedPolicy(YCBSugarBoxScriptedPolicy):
         palm_quat = self.robot.data.body_quat_w[0, self.palm_body_id]
         ee_target = self.strategy.last_ee_target
         sample.update({
+            "hand_joint_names": self.hand_joint_names,
+            "hand_processed_target_rad": term.processed_actions[
+                0, self.hand_action_indices].detach().cpu().tolist(),
             "post_step": int(self.env.episode_length_buf[0]),
             "ee_post_step_position_m": palm_pos.detach().cpu().tolist(),
             "ee_post_step_quaternion_wxyz": palm_quat.detach().cpu().tolist(),
@@ -281,4 +291,5 @@ class CPUHarvestScriptedPolicy(YCBSugarBoxScriptedPolicy):
         result = super().diagnostics()
         result["control"]["orientation_weight"] = self.orientation_weight
         result["control"]["trace_steps"] = len(self.control_trace)
+        result["control"]["closed_hand_target_rad"] = dict(CLOSED_HAND_RAD)
         return result
