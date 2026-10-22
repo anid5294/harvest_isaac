@@ -1,0 +1,203 @@
+{
+  "schema": "orchardbench_isaac_asset_v1",
+  "tree_file": "tree.usda",
+  "tree_sha256": "39cf04034ef9dd3cac40af1ca95f4b9847ece0bf3f9a151e233021b5364ca425",
+  "canonical_sha256": "b592fe5cf25fad1e680023bab01731f00229ca1bd88a36ddd8e9bf1defcf4171",
+  "source": {
+    "url": "https://github.com/humphreymunn/orchardbench",
+    "revision": "6313313db8b1a7d23fb2cc3afd67cac46f29399a",
+    "license": "Apache-2.0",
+    "preset": "apple",
+    "license_file": "LICENSE",
+    "source_files_sha256": {
+      "LICENSE": "e3b58d38c263886cbe6657347afb56a9a575063138473e793c563f2d1de76f55",
+      "treesim/config.py": "1827b552240bd284ef78b27b09e40d5167a1c6c465b84eaea2951036021299c7",
+      "treesim/skeleton.py": "9a7a47a15b50bf628a4d370b9cd2f394f3972bb64910fe012f081e658d4d3856",
+      "treesim/lsystem.py": "e889397b7f7b6fbfcb6e3cce74b1acc5c588c41eeb93b6d043f8db12ee3d59fb",
+      "treesim/foliage.py": "c63f5a3eb59571a14ab6ce2ad2110d1016739e5a2b4444b6f8d80d4f63cfb948",
+      "treesim/fruit.py": "22d4de5771c5b4ae5710bd3c76a6e865018ee9deba44389c60e27d4d8374d13e",
+      "treesim/builder.py": "534710afdb6ebe95b5f668bb55af25045603e8e6f6293b70596f57e439ee93f9"
+    },
+    "geometry_modules": [
+      "config.py",
+      "skeleton.py",
+      "lsystem.py",
+      "foliage.py",
+      "fruit.py",
+      "builder.py"
+    ],
+    "lsystem_params": {
+      "a": 18.95,
+      "d1": 137.5,
+      "d2": 137.5,
+      "lr": 1.109,
+      "vr": 1.732,
+      "n": 4,
+      "F0": 0.05,
+      "w0": 1.0,
+      "roll0": 45.0,
+      "trunk_length_factor": 4.0,
+      "radius_model": "pipe",
+      "tip_radius": 0.004,
+      "pipe_beta": 2.2,
+      "target_height": 2.6,
+      "base_radius": 0.055,
+      "shape_jitter": 0.0,
+      "kind": "apple",
+      "ap_scaffolds": [
+        3,
+        6
+      ],
+      "ap_trunk_internodes": [
+        2,
+        4
+      ],
+      "ap_scaffold_pitch": [
+        42.0,
+        65.0
+      ],
+      "ap_lateral_pitch": [
+        32.0,
+        58.0
+      ],
+      "ap_divergence": [
+        128.0,
+        148.0
+      ],
+      "ap_droop": [
+        4.0,
+        13.0
+      ],
+      "ap_len_decay": [
+        0.66,
+        0.82
+      ],
+      "ap_children": [
+        2,
+        3
+      ],
+      "ap_prune": [
+        0.08,
+        0.4
+      ],
+      "ap_wobble": [
+        5.0,
+        16.0
+      ],
+      "ap_internodes_per_axis": [
+        2,
+        4
+      ],
+      "ap_leader_decay": 0.82,
+      "ap_form_droop_bias": [
+        0.6,
+        1.6
+      ]
+    },
+    "foliage_params": {
+      "enabled": true,
+      "leaves_per_terminal": 4,
+      "min_order_for_leaves": 3,
+      "leaf_length": 0.0848,
+      "leaf_width": 0.05,
+      "leaf_color": [
+        0.18,
+        0.42,
+        0.12
+      ],
+      "leaf_mass": 0.002,
+      "physics": false,
+      "petiole_stiffness": 0.02,
+      "petiole_damping": 0.002
+    },
+    "fruit_params": {
+      "enabled": true,
+      "min_order": 2,
+      "prob_per_spur": 0.35,
+      "max_count": 40,
+      "radius": [
+        0.026,
+        0.035
+      ],
+      "mass": 0.16,
+      "stem_length": 0.025,
+      "tether_stiffness": 550.0,
+      "tether_damping_ratio": 0.9,
+      "detach_force": [
+        14.0,
+        23.0
+      ],
+      "detach_hysteresis": 6,
+      "tension_hysteresis": 12,
+      "tension_factor": 1.2,
+      "detach_drag": 0.0,
+      "branch_reaction": 1.0,
+      "reaction_max": 10.0,
+      "joint": "slide",
+      "colors": [
+        [
+          0.78,
+          0.1,
+          0.07
+        ],
+        [
+          0.85,
+          0.3,
+          0.05
+        ],
+        [
+          0.65,
+          0.62,
+          0.12
+        ]
+      ]
+    },
+    "foliage_density": 0.6,
+    "max_apples": 40,
+    "notes": "Native source placement; no robot reach adjustment by exporter."
+  },
+  "seed": 42,
+  "selected_fruit_id": 28,
+  "layout": {
+    "seed": 42,
+    "apples": [
+      [
+        0.7758749684943297,
+        -1.0960502731017878,
+        1.0597111973013031
+      ]
+    ],
+    "target_index": 0,
+    "basket": [
+      0.4258749684943297,
+      -1.4960502731017877,
+      0.78
+    ],
+    "trunk": [
+      0.12,
+      0.16,
+      0.8
+    ],
+    "radius": 0.03,
+    "mass": 0.16,
+    "stem_break_force": 17.341074446037137,
+    "stem_anchors": [
+      [
+        0.7758749684943297,
+        -1.0960502731017878,
+        1.114711197301303
+      ]
+    ],
+    "tree_model": "orchardbench"
+  },
+  "topology_validation": {
+    "max_fruit_anchor_error_m": 1.1102230246251565e-16,
+    "validated_branch_count": 168
+  },
+  "branch_count": 168,
+  "fruit_count": 40,
+  "leaf_count": 344,
+  "selected_fruit_wood_clearance_m": 0.0071095884754248,
+  "collision": "static eight-sided tapered convex hull per segment; visual-only leaves and other fruit",
+  "dynamic_fruit_count": 1
+}

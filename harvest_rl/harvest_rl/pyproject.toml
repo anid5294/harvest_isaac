@@ -1,0 +1,15 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "harvest_rl"
+version = "0.1.0"
+description = "Orchard apple-harvesting simulation environment (Isaac Lab 3.0 / Isaac Sim 6.1)"
+requires-python = ">=3.12,<3.13"
+
+[tool.setuptools.packages.find]
+include = ["harvest_rl*"]
+
+[tool.setuptools.package-data]
+harvest_rl = ["assets/**/*"]

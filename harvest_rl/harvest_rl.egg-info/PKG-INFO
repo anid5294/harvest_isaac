@@ -1,0 +1,5 @@
+Metadata-Version: 2.4
+Name: harvest_rl
+Version: 0.1.0
+Summary: Orchard apple-harvesting simulation environment (Isaac Lab 3.0 / Isaac Sim 6.1)
+Requires-Python: <3.13,>=3.12

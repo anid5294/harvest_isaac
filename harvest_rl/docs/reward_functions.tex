@@ -1,0 +1,91 @@
+\documentclass[11pt]{article}
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amssymb}
+\usepackage{booktabs}
+\usepackage{bm}
+
+\newcommand{\ind}{\mathbb{1}}
+
+\title{Reward Functions: Apple Pluck and Place Policies}
+\date{}
+
+\begin{document}
+\maketitle
+
+\section*{Notation}
+
+\begin{tabular}{@{}ll@{}}
+\toprule
+Symbol & Meaning \\
+\midrule
+$\mathbf{p}_f$ & midpoint of the thumb, index and middle fingertips \\
+$\mathbf{p}_a$ & apple centre \\
+$\mathbf{c}$ & chest point (robot base $+\,0.25$\,m up) \\
+$\mathbf{b}^{*}$ & apple's resting spot in the basket \\
+$d^{\mathrm{reach}}_t = \lVert \mathbf{p}_f - \mathbf{p}_a \rVert$ & fingertip-to-apple distance (m) \\
+$d^{\mathrm{chest}}_t = \lVert \mathbf{p}_a - \mathbf{c} \rVert$ & apple-to-chest distance (m) \\
+$d^{\mathrm{basket}}_t = \lVert \mathbf{p}_a - \mathbf{b}^{*} \rVert$ & apple-to-basket distance (m) \\
+$T_t \in \{0,1\}$ & all three fingers touch the apple (each finger has a link with contact force $\ge 0.05$\,N) \\
+$A_t \in \{0,1\}$ & apple still attached to the stem \\
+$G_t,\ P_t \in \{0,1\}$ & already grasped / already plucked in this episode \\
+$\ind[\cdot]$ & indicator function \\
+\bottomrule
+\end{tabular}
+
+\section*{Policy 1: Pluck (trained from scratch)}
+
+\begin{equation}
+\begin{aligned}
+r_t^{\mathrm{pluck}} ={}&
+\underbrace{10\,\big(d^{\mathrm{reach}}_{t-1}-d^{\mathrm{reach}}_{t}\big)\,(1-G_{t-1})}_{\text{reach}}
++\underbrace{5\,\ind\!\left[T_t A_t (1-G_{t-1})\right]}_{\text{grasp (once)}}
++\underbrace{10\,\ind\!\left[\mathrm{pluck}_t\right]}_{\text{pluck (once)}} \\
+&+\underbrace{0.1\,P_t\,T_t}_{\text{hold}}
++\underbrace{10\,\big(d^{\mathrm{chest}}_{t-1}-d^{\mathrm{chest}}_{t}\big)\,T_t}_{\text{toward chest}}
+\end{aligned}
+\end{equation}
+
+\begin{equation}
+\mathrm{pluck}_t = (1-A_t)\,(1-P_{t-1})\cdot \max_{k\in\{t-2,\,t-1,\,t\}} T_k \cdot \ind[\text{no failure}]
+\end{equation}
+
+\section*{Policy 2: Place (fine-tuned from Policy 1)}
+
+\begin{equation}
+\begin{aligned}
+r_t^{\mathrm{place}} ={}&
+\underbrace{10\,\big(d^{\mathrm{reach}}_{t-1}-d^{\mathrm{reach}}_{t}\big)(1-G_{t-1})
++ 5\,\ind[\mathrm{grasp}_t] + 10\,\ind[\mathrm{pluck}_t]}_{\text{same as Policy 1}} \\
+&+\underbrace{10\,\big(d^{\mathrm{basket}}_{t-1}-d^{\mathrm{basket}}_{t}\big)\,T_t}_{\text{to basket}}
++\underbrace{10\,\big(\Phi_t-\Phi_{t-1}\big)}_{\text{release shaping}}
++\underbrace{10\,\ind[\mathrm{placed}_t]}_{\text{once}}
++\underbrace{50\,\ind[\mathrm{success}_t]}_{\text{ends episode}}
+\end{aligned}
+\end{equation}
+
+Release potential, with $q_j$ the left-hand joint angles and $h_t$ the palm-to-apple distance:
+\begin{equation}
+\Phi_t = Z_t\left(\tfrac12\, o_t + \tfrac12\, a_t\right),\qquad
+o_t = 1-\frac{\min\!\left(\max_j |q_j|,\ 1.2\right)}{1.2},\qquad
+a_t = \min\!\left(\frac{h_t}{0.2},\ 1\right)\ind\!\left[\max_j |q_j| < 0.3\right]
+\end{equation}
+\begin{equation}
+Z_t = P_t \cdot \ind[\text{apple inside the basket walls}] \cdot \ind[\text{apple} < 8\text{\,cm above its resting height}]
+\end{equation}
+
+\noindent\textbf{Placed} fires once when $P_t=1$, the apple is settled in the basket, and the basket floor
+carries at least 40\% of its weight. \textbf{Success} is the harvest\_isaac rule: carried, placed,
+hand open with the palm more than 18\,cm away, held for 30 steps.
+
+\section*{Changes from Policy 1 to Policy 2}
+
+Removed the \emph{hold} and \emph{toward chest} terms; added \emph{to basket}, the release-shaping
+potential $\Phi$, \emph{placed} and \emph{success}. A per-step holding reward teaches the policy never to
+let go, and earlier runs without an explicit release incentive carried the apple to the basket and hovered.
+
+\section*{Both policies}
+
+Episodes end when the apple drops below 0.40\,m, when the stem breaks without a sustained grip, or at the
+time limit (15\,s for Policy 1, 20\,s for Policy 2). Difference terms are zero on the first step after a reset.
+
+\end{document}
