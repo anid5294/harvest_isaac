@@ -9,6 +9,7 @@ from ..robot import G1_DEX3
 
 @configclass
 class PickPlaceEnvCfg(OrchardRLEnvCfg):
+    policy_frame_yaw_deg: float = 0.0
     robot = G1_DEX3.replace(
         controlled_joints=G1_DEX3.controlled_joints[15:22] + G1_DEX3.controlled_joints[29:36]
     )  # left arm (shoulder x3, elbow, wrist x3) + left hand (7); waist and the rest hold home

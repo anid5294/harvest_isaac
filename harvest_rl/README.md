@@ -26,6 +26,30 @@ isaaclab.bat -p C:\isaac\harvest_rl\scripts\explore.py --viz kit --pull
 
 No window is the default in Isaac Lab 3.0; `--viz kit` opens one.
 
+## Mounted basket
+
+The pelvis-mounted basket uses [the mounted preset](../configs/orchard_mounted_basket.json).
+The preset defines the G1 attachment frame, interior dimensions, wall thickness, and dry
+mass. The runtime authors the floor and four walls as one dynamic USD body with a fixed joint.
+
+Run the scene preview from the repository root in the Isaac Lab 3.0 / Isaac Sim 6.1
+environment:
+
+```sh
+python harvest_rl/scripts/preview_mounted_basket.py --viz kit
+```
+
+For a bounded physics preview, pass `--headless --device cpu --steps 120`. The preview
+uses the OrchardBench tree and holds the G1 at its home posture.
+Use `--basket-config PATH` to preview another mount preset.
+
+The mounted harvest environment in `orchard_mounted_env.py` replaces the stationary
+basket and uses native shape contact and moving-frame fruit retention checks. The dense
+diagnostic entry point is `scripts/run_dense_mounted_harvest.py`. It accepts its
+`MountedBasketSpec` values under the review packet's `mount` key. The diagnostic needs
+a separately prepared review packet, inventory and scene assets, and a policy checkpoint.
+Its default mode validates the packet before starting Isaac.
+
 ## Where your work goes
 
 | You want to... | Edit |

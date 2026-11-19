@@ -33,9 +33,10 @@ from collections.abc import Sequence
 import torch
 
 from isaaclab.envs import DirectRLEnv
-from isaaclab.utils.math import axis_angle_from_quat, quat_conjugate, quat_mul
+from isaaclab.utils.math import axis_angle_from_quat, quat_conjugate, quat_mul, quat_rotate_inverse
 
-from .orchard_env_cfg import BASKET_INNER_SIZE, FRUIT, OrchardEnvCfg, basket_center
+from .compat import LAB3, as_torch, asset_call, backend_quat_xyzw, canonical_quat, default_root_pose
+from .orchard_env_cfg import BASKET_INNER_SIZE, OrchardEnvCfg
 from .task_logic import FAILURE_NAMES, HarvestParams, HarvestTracker
 
 
@@ -94,29 +95,29 @@ class OrchardEnv(DirectRLEnv):
         self._grasp_palm_id = self._robot.find_bodies([spec.grasp_palm_body])[0][0]
         self._grasp_hand_joint_ids, _ = self._robot.find_joints(spec.grasp_hand_joints, preserve_order=True)
 
-        limits = self._robot.data.soft_joint_pos_limits.torch[:, self.ctrl_joint_ids]
+        limits = as_torch(self._robot.data.soft_joint_pos_limits)[:, self.ctrl_joint_ids]
         self._ctrl_lower, self._ctrl_upper = limits[..., 0], limits[..., 1]
-        self._joint_targets = self._robot.data.default_joint_pos.torch[:, self.ctrl_joint_ids].clone()
+        self._joint_targets = as_torch(self._robot.data.default_joint_pos)[:, self.ctrl_joint_ids].clone()
 
         # Apple / stem geometry in env-local coordinates.
         def vec(values):
             return torch.tensor(values, dtype=torch.float32, device=dev).repeat(n, 1)
 
-        self._apple_center = vec(FRUIT.center)
-        self._stem_anchor = vec(FRUIT.anchor)
+        self._apple_center = vec(self.cfg.fruit.center)
+        self._stem_anchor = vec(self.cfg.fruit.anchor)
         axis = self._stem_anchor - self._apple_center
         self._stem_axis = axis / torch.linalg.norm(axis, dim=-1, keepdim=True)
-        self._basket_pos = vec(basket_center())
-        self._identity_quat = vec((0.0, 0.0, 0.0, 1.0))
+        self._basket_pos = vec(self.cfg.basket_position)
+        self._identity_quat = vec(backend_quat_xyzw((0.0, 0.0, 0.0, 1.0)))
 
         # Spring constants, and the spring rest point that makes the sagged apple sit at its
         # tree.json position: rest = center - K^-1 * m * g.
-        m = FRUIT.mass
+        m = self.cfg.fruit.mass
         c = self.cfg
         self._k_ax, self._k_lat = c.stem_axial_stiffness, c.stem_lateral_stiffness
         self._c_ax = 2.0 * c.stem_damping_ratio * (self._k_ax * m) ** 0.5
         self._c_lat = 2.0 * c.stem_damping_ratio * (self._k_lat * m) ** 0.5
-        inertia = 0.4 * m * FRUIT.radius**2
+        inertia = 0.4 * m * self.cfg.fruit.radius**2
         self._k_rot = c.stem_twist_stiffness
         self._c_rot = 2.0 * c.stem_damping_ratio * (self._k_rot * inertia) ** 0.5
         weight = torch.tensor(self.cfg.sim.gravity, device=dev) * m
@@ -129,6 +130,9 @@ class OrchardEnv(DirectRLEnv):
         self.stem_tension = torch.zeros(n, device=dev)
         self.stem_twist = torch.zeros(n, device=dev)
         self.detach_step = torch.full((n,), -1, dtype=torch.long, device=dev)
+        self.break_tension = torch.zeros(n, device=dev)
+        self.break_threshold = torch.zeros(n, device=dev)
+        self.break_external_force = torch.zeros(n, device=dev)
         self.apple_external_force = torch.zeros(n, 3, device=dev)
         """Extra world-frame force on the apple [N], applied every physics step (tests, wind, perturbations)."""
 
@@ -136,10 +140,10 @@ class OrchardEnv(DirectRLEnv):
         self.harvest = HarvestTracker(
             n,
             HarvestParams(
-                apple_radius=FRUIT.radius,
-                apple_mass=FRUIT.mass,
-                apple_rest_height=FRUIT.center[2],
-                basket_center=basket_center(),
+                apple_radius=self.cfg.fruit.radius,
+                apple_mass=self.cfg.fruit.mass,
+                apple_rest_height=self.cfg.fruit.center[2],
+                basket_center=self.cfg.basket_position,
                 basket_half_inner=(BASKET_INNER_SIZE[0] / 2 - 0.01, BASKET_INNER_SIZE[1] / 2 - 0.01),
                 gravity=-self.cfg.sim.gravity[2],
             ),
@@ -157,7 +161,7 @@ class OrchardEnv(DirectRLEnv):
         if mode == "absolute":
             targets = self._ctrl_lower + (self.actions + 1.0) * 0.5 * (self._ctrl_upper - self._ctrl_lower)
         elif mode == "offset":
-            home = self._robot.data.default_joint_pos.torch[:, self.ctrl_joint_ids]
+            home = as_torch(self._robot.data.default_joint_pos)[:, self.ctrl_joint_ids]
             targets = home + self.cfg.action_scale * self.actions
         elif mode == "delta":
             targets = self._joint_targets + self.cfg.action_scale * self.actions
@@ -167,14 +171,14 @@ class OrchardEnv(DirectRLEnv):
 
     def _apply_action(self):
         # Called every physics step (decimation times per env.step).
-        self._robot.set_joint_position_target_index(target=self._joint_targets, joint_ids=self.ctrl_joint_ids)
+        asset_call(self._robot, "set_joint_position_target", target=self._joint_targets, joint_ids=self.ctrl_joint_ids)
         self._apply_stem()
 
     def home_action(self) -> torch.Tensor:
         """The action that holds the robot's home pose under the current ``action_mode``."""
         if self.cfg.action_mode != "absolute":
             return torch.zeros(self.num_envs, self.num_controlled_joints, device=self.device)
-        home = self._robot.data.default_joint_pos.torch[:, self.ctrl_joint_ids]
+        home = as_torch(self._robot.data.default_joint_pos)[:, self.ctrl_joint_ids]
         return 2.0 * (home - self._ctrl_lower) / (self._ctrl_upper - self._ctrl_lower) - 1.0
 
     # ------------------------------------------------------------------------------------
@@ -184,10 +188,10 @@ class OrchardEnv(DirectRLEnv):
     def _apply_stem(self):
         origins = self.scene.env_origins
         data = self._apple.data
-        pos = data.root_pos_w.torch - origins
-        vel = data.root_lin_vel_w.torch
-        quat = data.root_quat_w.torch
-        ang_vel = data.root_ang_vel_w.torch
+        pos = as_torch(data.root_pos_w) - origins
+        vel = as_torch(data.root_lin_vel_w)
+        quat = as_torch(data.root_quat_w)
+        ang_vel = as_torch(data.root_ang_vel_w)
 
         axis = self._stem_axis
         disp = pos - self._stem_rest
@@ -206,15 +210,25 @@ class OrchardEnv(DirectRLEnv):
         if self.cfg.stem_twist_break_angle is not None:
             snapped |= attached & (self.stem_twist > self.cfg.stem_twist_break_angle)
         if snapped.any():
+            self.break_tension[snapped] = self.stem_tension[snapped]
+            self.break_threshold[snapped] = self.stem_break_force[snapped]
+            self.break_external_force[snapped] = torch.linalg.norm(self.apple_external_force[snapped], dim=-1)
             self.apple_attached &= ~snapped
             self.detach_step[snapped] = self.episode_length_buf[snapped]
 
         on = self.apple_attached.unsqueeze(-1).float()
-        self._apple.permanent_wrench_composer.set_forces_and_torques_index(
-            forces=(force * on + self.apple_external_force).unsqueeze(1),
-            torques=(torque * on).unsqueeze(1),
-            is_global=True,
-        )
+        force_w = force * on + self.apple_external_force
+        torque_w = torque * on
+        if LAB3:
+            self._apple.permanent_wrench_composer.set_forces_and_torques_index(
+                forces=force_w.unsqueeze(1), torques=torque_w.unsqueeze(1), is_global=True
+            )
+        else:
+            # Lab 2's wrench setter accepts body-frame values only.
+            self._apple.set_external_force_and_torque(
+                forces=quat_rotate_inverse(quat, force_w).unsqueeze(1),
+                torques=quat_rotate_inverse(quat, torque_w).unsqueeze(1),
+            )
 
     # ------------------------------------------------------------------------------------
     # Task outcome (harvest_isaac logic)
@@ -222,7 +236,8 @@ class OrchardEnv(DirectRLEnv):
 
     def _contact_forces(self) -> torch.Tensor:
         """Normal-force vectors (num_envs, 1 + num_contact_bodies, 3): basket floor, then each contact body."""
-        return self._apple_contact.data.normal_force_matrix_w.torch[:, 0]
+        matrix = self._apple_contact.data.normal_force_matrix_w if LAB3 else self._apple_contact.data.force_matrix_w
+        return as_torch(matrix)[:, 0]
 
     def _update_task(self):
         """Advance the harvest bookkeeping by one control step (called from _get_dones)."""
@@ -232,14 +247,14 @@ class OrchardEnv(DirectRLEnv):
         magnitudes = torch.linalg.norm(forces, dim=-1)
         self.harvest.update(
             detached=~self.apple_attached,
-            apple_pos=apple.root_pos_w.torch - origins,
-            apple_speed=torch.linalg.norm(apple.root_lin_vel_w.torch, dim=-1),
-            palm_pos=robot.body_pos_w.torch[:, self._grasp_palm_id] - origins,
+            apple_pos=as_torch(apple.root_pos_w) - origins,
+            apple_speed=torch.linalg.norm(as_torch(apple.root_lin_vel_w), dim=-1),
+            palm_pos=as_torch(robot.body_pos_w)[:, self._grasp_palm_id] - origins,
             thumb_forces=magnitudes[:, self._thumb_cols],
             finger_forces=magnitudes[:, self._finger_cols],
             basket_normal_force_z=forces[:, 0, 2],
-            hand_joint_pos=robot.joint_pos.torch[:, self._grasp_hand_joint_ids],
-            finite=torch.isfinite(robot.joint_pos.torch).all(-1) & torch.isfinite(apple.root_state_w.torch).all(-1),
+            hand_joint_pos=as_torch(robot.joint_pos)[:, self._grasp_hand_joint_ids],
+            finite=torch.isfinite(as_torch(robot.joint_pos)).all(-1) & torch.isfinite(as_torch(apple.root_state_w)).all(-1),
         )
 
     # ------------------------------------------------------------------------------------
@@ -261,7 +276,7 @@ class OrchardEnv(DirectRLEnv):
     @property
     def joint_home(self) -> torch.Tensor:
         """(num_envs, n) home pose of each controlled joint [rad] (the reset pose)."""
-        return self._robot.data.default_joint_pos.torch[:, self.ctrl_joint_ids]
+        return as_torch(self._robot.data.default_joint_pos)[:, self.ctrl_joint_ids]
 
     @property
     def basket_pos(self) -> torch.Tensor:
@@ -286,28 +301,32 @@ class OrchardEnv(DirectRLEnv):
         h = self.harvest
         return {
             # robot
-            "joint_pos": robot.joint_pos.torch,  # all joints, order: self.joint_names
-            "joint_vel": robot.joint_vel.torch,
-            "ctrl_joint_pos": robot.joint_pos.torch[:, ids],  # controlled joints, order: self.ctrl_joint_names
-            "ctrl_joint_vel": robot.joint_vel.torch[:, ids],
+            "joint_pos": as_torch(robot.joint_pos),  # all joints, order: self.joint_names
+            "joint_vel": as_torch(robot.joint_vel),
+            "ctrl_joint_pos": as_torch(robot.joint_pos)[:, ids],  # controlled joints, order: self.ctrl_joint_names
+            "ctrl_joint_vel": as_torch(robot.joint_vel)[:, ids],
             "ctrl_joint_target": self._joint_targets,
-            "root_pos": robot.root_pos_w.torch - origins,
-            "root_quat": robot.root_quat_w.torch,
-            "body_pos": robot.body_pos_w.torch[:, bids] - origins.unsqueeze(1),  # order: self.tracked_body_names
-            "body_quat": robot.body_quat_w.torch[:, bids],
-            "body_lin_vel": robot.body_lin_vel_w.torch[:, bids],
-            "body_ang_vel": robot.body_ang_vel_w.torch[:, bids],
+            "root_pos": as_torch(robot.root_pos_w) - origins,
+            "root_quat": canonical_quat(as_torch(robot.root_quat_w)),
+            "body_pos": as_torch(robot.body_pos_w)[:, bids] - origins.unsqueeze(1),  # order: self.tracked_body_names
+            "body_quat": canonical_quat(as_torch(robot.body_quat_w)[:, bids]),
+            "body_lin_vel": as_torch(robot.body_lin_vel_w)[:, bids],
+            "body_ang_vel": as_torch(robot.body_ang_vel_w)[:, bids],
             # apple and stem
-            "apple_pos": apple.root_pos_w.torch - origins,
-            "apple_quat": apple.root_quat_w.torch,
-            "apple_lin_vel": apple.root_lin_vel_w.torch,
-            "apple_ang_vel": apple.root_ang_vel_w.torch,
+            "apple_pos": as_torch(apple.root_pos_w) - origins,
+            "apple_quat": canonical_quat(as_torch(apple.root_quat_w)),
+            "apple_lin_vel": as_torch(apple.root_lin_vel_w),
+            "apple_ang_vel": as_torch(apple.root_ang_vel_w),
             "apple_attached": self.apple_attached,
+            "break_tension": self.break_tension,
+            "break_threshold": self.break_threshold,
+            "break_external_force": self.break_external_force,
             "stem_tension": self.stem_tension,  # current elastic stem force [N]
             "stem_twist": self.stem_twist,  # current apple rotation from rest [rad]
             "detach_step": self.detach_step,
             # contacts (normal force magnitudes [N])
-            "finger_contact_force": contact[:, 1:],  # order: self.contact_body_names
+            "finger_contact_force": contact[:, 1:1 + len(self.contact_body_names)],
+            "wood_contact_force": contact[:, 1 + len(self.contact_body_names):].sum(-1),
             "basket_contact_force": contact[:, 0],
             # harvest_isaac task status
             "hand_distance": h.hand_distance,  # grasping palm to apple [m]
@@ -346,18 +365,18 @@ class OrchardEnv(DirectRLEnv):
         ids = self.ctrl_joint_ids
         # harvest_isaac's PreviewPolicyCfg: joint_pos_rel, joint_vel_rel, last_action.
         terms = [
-            robot.joint_pos.torch[:, ids] - robot.default_joint_pos.torch[:, ids],
-            robot.joint_vel.torch[:, ids] - robot.default_joint_vel.torch[:, ids],
+            as_torch(robot.joint_pos)[:, ids] - as_torch(robot.default_joint_pos)[:, ids],
+            as_torch(robot.joint_vel)[:, ids] - as_torch(robot.default_joint_vel)[:, ids],
             self.actions,
         ]
         if self.cfg.observation_mode == "state":
             origins = self.scene.env_origins
-            apple_pos = self._apple.data.root_pos_w.torch - origins
-            palms = robot.body_pos_w.torch[:, self.tracked_body_ids] - origins.unsqueeze(1)
+            apple_pos = as_torch(self._apple.data.root_pos_w) - origins
+            palms = as_torch(robot.body_pos_w)[:, self.tracked_body_ids] - origins.unsqueeze(1)
             terms += [
                 (palms - apple_pos.unsqueeze(1)).flatten(1),
                 apple_pos - self._basket_pos,
-                self._apple.data.root_lin_vel_w.torch,
+                as_torch(self._apple.data.root_lin_vel_w),
                 self.apple_attached.float().unsqueeze(-1),
             ]
         return {"policy": torch.cat(terms, dim=-1)}
@@ -399,27 +418,30 @@ class OrchardEnv(DirectRLEnv):
         k = len(env_ids)
 
         # Robot: home pose (+ optional noise), zero velocity, fixed root at its stance.
-        joint_pos = self._robot.data.default_joint_pos.torch[env_ids].clone()
+        joint_pos = as_torch(self._robot.data.default_joint_pos)[env_ids].clone()
         if self.cfg.reset_joint_noise > 0.0:
             joint_pos += (torch.rand_like(joint_pos) * 2.0 - 1.0) * self.cfg.reset_joint_noise
-            limits = self._robot.data.soft_joint_pos_limits.torch[env_ids]
+            limits = as_torch(self._robot.data.soft_joint_pos_limits)[env_ids]
             joint_pos = torch.clamp(joint_pos, limits[..., 0], limits[..., 1])
-        root_pose = self._robot.data.default_root_pose.torch[env_ids].clone()
+        root_pose = default_root_pose(self._robot.data)[env_ids].clone()
         root_pose[:, :3] += origins
-        self._robot.write_root_pose_to_sim_index(root_pose=root_pose, env_ids=env_ids)
-        self._robot.write_root_velocity_to_sim_index(root_velocity=torch.zeros(k, 6, device=self.device), env_ids=env_ids)
-        self._robot.write_joint_position_to_sim_index(position=joint_pos, env_ids=env_ids)
-        self._robot.write_joint_velocity_to_sim_index(velocity=torch.zeros_like(joint_pos), env_ids=env_ids)
-        self._robot.set_joint_position_target_index(target=joint_pos, env_ids=env_ids)
+        asset_call(self._robot, "write_root_pose_to_sim", root_pose=root_pose, env_ids=env_ids)
+        asset_call(self._robot, "write_root_velocity_to_sim", root_velocity=torch.zeros(k, 6, device=self.device), env_ids=env_ids)
+        asset_call(self._robot, "write_joint_position_to_sim", position=joint_pos, env_ids=env_ids)
+        asset_call(self._robot, "write_joint_velocity_to_sim", velocity=torch.zeros_like(joint_pos), env_ids=env_ids)
+        asset_call(self._robot, "set_joint_position_target", target=joint_pos, env_ids=env_ids)
         self._joint_targets[env_ids] = joint_pos[:, self.ctrl_joint_ids]
 
         # Apple: back on its stem, at rest.
         apple_pose = torch.cat((self._apple_center[env_ids] + origins, self._identity_quat[env_ids]), dim=-1)
-        self._apple.write_root_pose_to_sim_index(root_pose=apple_pose, env_ids=env_ids)
-        self._apple.write_root_velocity_to_sim_index(root_velocity=torch.zeros(k, 6, device=self.device), env_ids=env_ids)
+        asset_call(self._apple, "write_root_pose_to_sim", root_pose=apple_pose, env_ids=env_ids)
+        asset_call(self._apple, "write_root_velocity_to_sim", root_velocity=torch.zeros(k, 6, device=self.device), env_ids=env_ids)
 
         # Stem and task bookkeeping.
         self.apple_attached[env_ids] = True
+        self.break_tension[env_ids] = 0.0
+        self.break_threshold[env_ids] = 0.0
+        self.break_external_force[env_ids] = 0.0
         if self.cfg.stem_break_force_range is not None:
             lo, hi = self.cfg.stem_break_force_range
             self.stem_break_force[env_ids] = torch.empty(k, device=self.device).uniform_(lo, hi)

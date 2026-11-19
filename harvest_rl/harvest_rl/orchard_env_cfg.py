@@ -14,8 +14,6 @@ from __future__ import annotations
 import math
 from dataclasses import MISSING
 
-from isaaclab_physx.physics import PhysxCfg
-
 import isaaclab.sim as sim_utils
 from isaaclab.assets import ArticulationCfg, AssetBaseCfg, RigidObjectCfg
 from isaaclab.envs import DirectRLEnvCfg
@@ -23,10 +21,18 @@ from isaaclab.scene import InteractiveSceneCfg
 from isaaclab.sensors import CameraCfg, ContactSensorCfg
 from isaaclab.sim import SimulationCfg
 from isaaclab.utils import configclass
-from isaaclab.visualizers import VisualizerCfg
+
+from .compat import LAB3, backend_quat_xyzw
+
+if LAB3:
+    from isaaclab_physx.physics import PhysxCfg
+    from isaaclab.visualizers import VisualizerCfg
+else:
+    from isaaclab.envs.common import ViewerCfg
+    from isaaclab.sim import PhysxCfg
 
 from .robot import ROBOT, RobotSpec
-from .tree import APPLE_USD, TREE_USD, load_fruit
+from .tree import APPLE_USD, TREE_USD, Fruit, load_fruit
 
 FRUIT = load_fruit()
 
@@ -43,8 +49,8 @@ CAMERA_TARGET = (0.0, -0.15, 1.2)
 CAMERA_PROFILE = "orchardbench_single_tree_three_view_v1"
 
 
-def basket_center() -> tuple[float, float, float]:
-    return (FRUIT.center[0] + BASKET_OFFSET_XY[0], FRUIT.center[1] + BASKET_OFFSET_XY[1], BASKET_FLOOR_HEIGHT)
+def basket_center(fruit=FRUIT) -> tuple[float, float, float]:
+    return (fruit.center[0] + BASKET_OFFSET_XY[0], fruit.center[1] + BASKET_OFFSET_XY[1], BASKET_FLOOR_HEIGHT)
 
 
 def _material(color, roughness=0.72):
@@ -65,10 +71,10 @@ def _kinematic_box(prim: str, size, pos, color) -> AssetBaseCfg:
     )
 
 
-def _stem() -> AssetBaseCfg:
+def _stem(fruit=FRUIT) -> AssetBaseCfg:
     """harvest_isaac's stem: a 3 mm kinematic collidable cylinder from the apple surface up to
     the branch (vertical for this apple)."""
-    bottom_z, top_z = FRUIT.anchor[2] - FRUIT.stem_length, FRUIT.anchor[2]
+    bottom_z, top_z = fruit.anchor[2] - fruit.stem_length, fruit.anchor[2]
     return AssetBaseCfg(
         prim_path="{ENV_REGEX_NS}/Stem",
         spawn=sim_utils.CylinderCfg(
@@ -77,7 +83,7 @@ def _stem() -> AssetBaseCfg:
             collision_props=sim_utils.CollisionPropertiesCfg(collision_enabled=True),
             visual_material=_material((0.28, 0.11, 0.035), roughness=0.88),
         ),
-        init_state=AssetBaseCfg.InitialStateCfg(pos=(FRUIT.anchor[0], FRUIT.anchor[1], (bottom_z + top_z) / 2)),
+        init_state=AssetBaseCfg.InitialStateCfg(pos=(fruit.anchor[0], fruit.anchor[1], (bottom_z + top_z) / 2)),
     )
 
 
@@ -119,7 +125,9 @@ def external_camera_cfg() -> CameraCfg:
         height=480,
         data_types=["rgb", "distance_to_image_plane"],
         depth_clipping_behavior="max",
-        offset=CameraCfg.OffsetCfg(pos=CAMERA_EYE, rot=_look_at_xyzw(CAMERA_EYE, CAMERA_TARGET), convention="opengl"),
+        offset=CameraCfg.OffsetCfg(
+            pos=CAMERA_EYE, rot=backend_quat_xyzw(_look_at_xyzw(CAMERA_EYE, CAMERA_TARGET)), convention="opengl"
+        ),
         spawn=sim_utils.PinholeCameraCfg(
             focal_length=28.0, focus_distance=2.0, horizontal_aperture=20.955, clipping_range=(0.05, 10.0)
         ),
@@ -134,7 +142,7 @@ def wrist_camera_cfg(parent_body, pos, rot_xyzw, focal_length) -> CameraCfg:
         width=640,
         height=480,
         data_types=["rgb"],
-        offset=CameraCfg.OffsetCfg(pos=pos, rot=rot_xyzw, convention="world"),
+        offset=CameraCfg.OffsetCfg(pos=pos, rot=backend_quat_xyzw(rot_xyzw), convention="world"),
         spawn=sim_utils.PinholeCameraCfg(
             focal_length=focal_length, focus_distance=0.7, horizontal_aperture=20.955, clipping_range=(0.03, 5.0)
         ),
@@ -158,7 +166,7 @@ class OrchardSceneCfg(InteractiveSceneCfg):
     key_light = AssetBaseCfg(
         prim_path="/World/KeyLight",
         spawn=sim_utils.DistantLightCfg(intensity=2200.0, color=(1.0, 0.95, 0.88), angle=0.8),
-        init_state=AssetBaseCfg.InitialStateCfg(rot=(0.3827, 0.0, 0.0, 0.9239)),
+        init_state=AssetBaseCfg.InitialStateCfg(rot=backend_quat_xyzw((0.3827, 0.0, 0.0, 0.9239))),
     )
 
     # 168 static wood colliders, visual leaves, 39 visual-only apples (fruit 28 is left out).
@@ -208,20 +216,29 @@ class OrchardEnvCfg(DirectRLEnvCfg):
 
     # -- robot (see harvest_rl/robot.py)
     robot: RobotSpec = ROBOT
+    fruit: Fruit = FRUIT
+    basket_position: tuple[float, float, float] = basket_center()
+    case_branches: list | None = None
+    orchard_case: dict | None = None
 
     # -- timing: 120 Hz physics, 30 Hz control (harvest_isaac's VLAEnvCfg)
     sim: SimulationCfg = SimulationCfg(
         dt=1 / 120,
         render_interval=4,
-        physics=PhysxCfg(),
+        **({"physics": PhysxCfg()} if LAB3 else {"physx": PhysxCfg()}),
         physics_material=sim_utils.RigidBodyMaterialCfg(
             static_friction=0.8, dynamic_friction=0.65, restitution=0.02, friction_combine_mode="max"
         ),
-        default_visualizer_cfg=VisualizerCfg(eye=CAMERA_EYE, lookat=CAMERA_TARGET),
+        **({"default_visualizer_cfg": VisualizerCfg(eye=CAMERA_EYE, lookat=CAMERA_TARGET)} if LAB3 else {}),
     )
+    if not LAB3:
+        viewer: ViewerCfg = ViewerCfg(eye=CAMERA_EYE, lookat=CAMERA_TARGET)
     decimation: int = 4
     episode_length_s: float = 90.0
-    num_rerenders_on_reset: int = 1
+    if LAB3:
+        num_rerenders_on_reset: int = 1
+    else:
+        rerender_on_reset: bool = True
     wait_for_textures: bool = True
 
     # -- scene. harvest_isaac runs a single environment.
@@ -286,8 +303,8 @@ class OrchardEnvCfg(DirectRLEnvCfg):
         self.scene.robot = spec.articulation.replace(
             prim_path="{ENV_REGEX_NS}/Robot",
             init_state=spec.articulation.init_state.replace(
-                pos=(FRUIT.center[0] + x, FRUIT.center[1] + y, z),
-                rot=spec.root_rot_xyzw(),
+                pos=(self.fruit.center[0] + x, self.fruit.center[1] + y, z),
+                rot=backend_quat_xyzw(spec.root_rot_xyzw()),
             ),
         )
         # Contact forces between the apple and the basket floor, then each robot contact body.
@@ -312,4 +329,7 @@ class OrchardRLEnvCfg(OrchardEnvCfg):
     scene: OrchardSceneCfg = OrchardSceneCfg(num_envs=64, env_spacing=5.0, replicate_physics=True)
     cameras: bool = False
     observation_mode: str = "state"
-    num_rerenders_on_reset: int = 0
+    if LAB3:
+        num_rerenders_on_reset: int = 0
+    else:
+        rerender_on_reset: bool = False

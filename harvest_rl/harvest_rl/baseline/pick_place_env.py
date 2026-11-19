@@ -11,8 +11,10 @@ from collections.abc import Sequence
 
 import torch
 
+from ..compat import as_torch
 from ..orchard_env import OrchardEnv
-from ..orchard_env_cfg import FRUIT
+from ..policy_frame import rotate_vectors, rotate_quaternions_xyzw
+
 from .pick_place_env_cfg import PickPlaceEnvCfg
 
 LEFT_HAND_TIPS = ["left_hand_thumb_2_link", "left_hand_index_1_link", "left_hand_middle_1_link"]
@@ -58,25 +60,26 @@ class PickPlaceEnv(OrchardEnv):
 
     def _grasp_point(self):
         """Mean of the thumb, index and middle fingertip links (env-local)."""
-        return self._robot.data.body_pos_w.torch[:, self._tip_ids].mean(1) - self.scene.env_origins
+        return as_torch(self._robot.data.body_pos_w)[:, self._tip_ids].mean(1) - self.scene.env_origins
 
     def _get_observations(self) -> dict:
         s = self.get_state()
         robot = self._robot.data
         ids = self.ctrl_joint_ids
         apple = s["apple_pos"]
-        tips = robot.body_pos_w.torch[:, self._tip_ids] - self.scene.env_origins.unsqueeze(1)
+        tips = as_torch(robot.body_pos_w)[:, self._tip_ids] - self.scene.env_origins.unsqueeze(1)
         palm = s["body_pos"][:, 0]
         n_fingers = len(self.cfg.robot.grasp_thumb_bodies) + len(self.cfg.robot.grasp_finger_bodies)
+        yaw = self.cfg.policy_frame_yaw_deg
         actor = torch.cat((
-            robot.joint_pos.torch[:, ids] - robot.default_joint_pos.torch[:, ids],
-            0.1 * robot.joint_vel.torch[:, ids],
+            as_torch(robot.joint_pos)[:, ids] - as_torch(robot.default_joint_pos)[:, ids],
+            0.1 * as_torch(robot.joint_vel)[:, ids],
             self.actions,
-            apple - palm,
-            (apple.unsqueeze(1) - tips).flatten(1),
-            s["body_quat"][:, 0],
-            self.basket_pos - apple,
-            s["apple_lin_vel"],
+            rotate_vectors(apple - palm, yaw),
+            rotate_vectors(apple.unsqueeze(1) - tips, yaw).flatten(1),
+            rotate_quaternions_xyzw(s["body_quat"][:, 0], yaw),
+            rotate_vectors(self.basket_pos - apple, yaw),
+            rotate_vectors(s["apple_lin_vel"], yaw),
             s["apple_attached"].float().unsqueeze(-1),
             torch.clamp(s["finger_contact_force"][:, :n_fingers], 0.0, 5.0) / 5.0,
         ), dim=-1)
@@ -100,7 +103,7 @@ class PickPlaceEnv(OrchardEnv):
         d_grasp = torch.linalg.norm(self._grasp_point() - apple, dim=-1)
         lift = torch.clamp((apple[:, 2] - self._apple_center[:, 2]) / 0.06, 0.0, 1.0)
         # Where the apple rests on the basket floor (floor top is 1 cm above basket_pos).
-        target = self.basket_pos + torch.tensor([0.0, 0.0, 0.01 + FRUIT.half_extents[2]], device=self.device)
+        target = self.basket_pos + torch.tensor([0.0, 0.0, 0.01 + self.cfg.fruit.half_extents[2]], device=self.device)
         d_basket = torch.linalg.norm(apple - target, dim=-1)
 
         # Potentials in [0, 1]; only their change is rewarded, so holding still earns nothing.

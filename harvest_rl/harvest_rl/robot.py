@@ -36,7 +36,17 @@ from isaaclab.actuators import ImplicitActuatorCfg
 from isaaclab.assets import ArticulationCfg
 from isaaclab.utils import configclass
 
+from .compat import LAB3
 from .tree import ASSET_DIR
+
+
+def _actuator_limits(effort: float, velocity: float | None = None) -> dict:
+    """Actuator limit keyword names changed in Isaac Lab 3.0."""
+    prefix = "joint_" if LAB3 else ""
+    limits = {f"{prefix}effort_limit": effort}
+    if velocity is not None:
+        limits[f"{prefix}velocity_limit"] = velocity
+    return limits
 
 
 @configclass
@@ -154,29 +164,26 @@ G1_DEX3 = RobotSpec(
         actuators={
             "legs": ImplicitActuatorCfg(
                 joint_names_expr=[".*_hip_.*_joint", ".*_knee_joint", ".*_ankle_.*_joint"],
-                joint_effort_limit=300.0,
-                joint_velocity_limit=100.0,
+                **_actuator_limits(300.0, 100.0),
                 stiffness=1000.0,
                 damping=100.0,
                 armature=0.01,
             ),
             "waist": ImplicitActuatorCfg(
                 joint_names_expr=["waist_.*_joint"],
-                joint_effort_limit=1000.0,
+                **_actuator_limits(1000.0),
                 stiffness=10000.0,
                 damping=10000.0,
             ),
             "arms": ImplicitActuatorCfg(
                 joint_names_expr=[".*_shoulder_.*_joint", ".*_elbow_joint", ".*_wrist_.*_joint"],
-                joint_effort_limit=300.0,
-                joint_velocity_limit=100.0,
+                **_actuator_limits(300.0, 100.0),
                 stiffness={".*_shoulder_.*_joint": 300.0, ".*_elbow_joint": 400.0, ".*_wrist_.*_joint": 400.0},
                 damping={".*_shoulder_.*_joint": 3.0, ".*_elbow_joint": 2.5, ".*_wrist_.*_joint": 2.5},
             ),
             "hands": ImplicitActuatorCfg(
                 joint_names_expr=[".*_hand_(thumb|middle|index)_.*_joint"],
-                joint_effort_limit=300.0,
-                joint_velocity_limit=100.0,
+                **_actuator_limits(300.0, 100.0),
                 stiffness=100.0,
                 damping=10.0,
                 armature=0.1,

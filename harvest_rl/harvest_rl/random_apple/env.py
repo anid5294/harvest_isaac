@@ -19,8 +19,9 @@ from collections.abc import Sequence
 
 import torch
 
+from ..compat import as_torch, asset_call, default_root_pose
 from ..baseline.pick_place_env import PickPlaceEnv
-from ..orchard_env_cfg import BASKET_INNER_SIZE, FRUIT
+from ..orchard_env_cfg import BASKET_INNER_SIZE
 from ..task_logic import APPLE_DROPPED, DETACHED_WITHOUT_GRASP, NO_FAILURE
 from ..tree import TREE_JSON
 from .env_cfg import BASKET_PARTS, RandomAppleEnvCfg
@@ -31,7 +32,8 @@ def _clear_of_wood(center, radius, branches):
     for b in branches:
         start, end = b["start"], b["end"]
         d = [e - s for s, e in zip(start, end)]
-        t = sum((p - s) * di for p, s, di in zip(center, start, d)) / sum(di * di for di in d)
+        length_sq = sum(di * di for di in d)
+        t = sum((p - s) * di for p, s, di in zip(center, start, d)) / length_sq if length_sq else 0.0
         q = [s + max(0.0, min(1.0, t)) * di for s, di in zip(start, d)]
         if math.dist(center, q) - radius - max(b["radius_start"], b["radius_end"]) <= 0.0:
             return False
@@ -39,8 +41,11 @@ def _clear_of_wood(center, radius, branches):
 
 
 def valid_offsets(cfg: RandomAppleEnvCfg) -> list[tuple[float, float, float]]:
-    branches = json.loads(TREE_JSON.read_text())["branches"]
-    r = max(FRUIT.half_extents)
+    branches = cfg.case_branches if cfg.case_branches is not None else json.loads(TREE_JSON.read_text())["branches"]
+    fruit = cfg.fruit
+    r = max(fruit.half_extents)
+    if cfg.orchard_case is not None and (cfg.apple_offset_xy != 0 or cfg.apple_offset_z != 0):
+        raise ValueError("OrchardSpec fruit must remain on its actual branch anchor")
     n_xy, n_z = cfg.offset_grid, max(3, cfg.offset_grid // 2 + 1)
 
     def axis(limit, n):
@@ -50,7 +55,7 @@ def valid_offsets(cfg: RandomAppleEnvCfg) -> list[tuple[float, float, float]]:
     for dx in axis(cfg.apple_offset_xy, n_xy):
         for dy in axis(cfg.apple_offset_xy, n_xy):
             for dz in axis(cfg.apple_offset_z, n_z):
-                c = [FRUIT.center[0] + dx, FRUIT.center[1] + dy, FRUIT.center[2] + dz]
+                c = [fruit.center[0] + dx, fruit.center[1] + dy, fruit.center[2] + dz]
                 if _clear_of_wood(c, r, branches):
                     out.append((dx, dy, dz))
     if not out:
@@ -100,16 +105,16 @@ class RandomAppleEnv(PickPlaceEnv):
         # Once the carried apple is low inside the basket walls: progress in opening the hand,
         # then in moving the palm away (harvest_isaac's release needs open hand, palm > 18 cm).
         h = self.harvest
-        apple = self._apple.data.root_pos_w.torch - self.scene.env_origins
+        apple = as_torch(self._apple.data.root_pos_w) - self.scene.env_origins
         rel = apple - self._basket_pos
-        r = FRUIT.radius
+        r = self.cfg.fruit.radius
         in_zone = (
             h.carried & ~self.apple_attached
             & (rel[:, 0].abs() < BASKET_INNER_SIZE[0] / 2 - 0.01 - r)
             & (rel[:, 1].abs() < BASKET_INNER_SIZE[1] / 2 - 0.01 - r)
-            & (rel[:, 2] < 0.01 + FRUIT.half_extents[2] + 0.08)
+            & (rel[:, 2] < 0.01 + self.cfg.fruit.half_extents[2] + 0.08)
         )
-        hand = self._robot.data.joint_pos.torch[:, self._hand_ids].abs().max(-1).values
+        hand = as_torch(self._robot.data.joint_pos)[:, self._hand_ids].abs().max(-1).values
         openness = 1.0 - torch.clamp(hand, 0.0, 1.2) / 1.2
         away = torch.clamp(h.hand_distance / 0.2, 0.0, 1.0) * h.opened.float()
         phi = in_zone.float() * (0.5 * openness + 0.5 * away)
@@ -168,16 +173,16 @@ class RandomAppleEnv(PickPlaceEnv):
         self._phi_release[env_ids] = 0.0
 
         for part, shift in [(self._stem, offset)] + [(p, b_off) for p in self._basket_parts]:
-            pose = part.data.default_root_pose.torch[env_ids].clone()
+            pose = default_root_pose(part.data)[env_ids].clone()
             pose[:, :3] += origins + shift
-            part.write_root_pose_to_sim_index(root_pose=pose, env_ids=env_ids)
+            asset_call(part, "write_root_pose_to_sim", root_pose=pose, env_ids=env_ids)
 
         # Random start pose for the controlled (arm + hand) joints only.
         if self.cfg.arm_reset_noise > 0.0:
             ids = self.ctrl_joint_ids
-            q = self._robot.data.default_joint_pos.torch[env_ids][:, ids]
+            q = as_torch(self._robot.data.default_joint_pos)[env_ids][:, ids]
             q = q + (torch.rand_like(q) * 2.0 - 1.0) * self.cfg.arm_reset_noise
             q = torch.clamp(q, self._ctrl_lower[env_ids], self._ctrl_upper[env_ids])
-            self._robot.write_joint_position_to_sim_index(position=q, joint_ids=ids, env_ids=env_ids)
-            self._robot.set_joint_position_target_index(target=q, joint_ids=ids, env_ids=env_ids)
+            asset_call(self._robot, "write_joint_position_to_sim", position=q, joint_ids=ids, env_ids=env_ids)
+            asset_call(self._robot, "set_joint_position_target", target=q, joint_ids=ids, env_ids=env_ids)
             self._joint_targets[env_ids] = q
