@@ -285,29 +285,3 @@ Replay normalized actions with:
 
 `outputs/` is ignored by Git. Publish validated datasets to a dataset registry
 or object store rather than committing them.
-
-## Isaac Lab Arena apple grasp trial
-
-`scripts/arena_apple_pick.py` runs with Arena 0.3.0 and Isaac Sim 6.1.0. It
-builds a G1, lit white collision tabletop, ground, apple, and plate; commands
-the left arm and hand, and saves four inspection views (head, both wrists,
-and fixed external overview), `result.json`, and `trajectory.jsonl`. It uses
-Arena's Objaverse apple. Wrist camera offsets are provisional. This 23-D
-WBC/PINK trial does not yet emit the project's 43-D contract.
-
-Run from an installed Arena checkout:
-
-```bash
-cd /home/vlakbnn/anikad/deps/IsaacLab-Arena-native
-uv run --no-sync python \
-  /home/vlakbnn/anikad/harvest_isaac/scripts/arena_apple_pick.py \
-  --headless --num_envs 1 --presets physx \
-  --output /home/vlakbnn/anikad/harvest_isaac/outputs/arena_apple_pick
-```
-
-Use `result.json` as the outcome. `verified_pick_and_place` requires a lift near
-the hand and sustained plate contact after release and retreat. Review the video
-to confirm the visible grasp. Validate the four MP4s and result with
-`python3 scripts/check_arena_trial.py outputs/arena_apple_pick` from this checkout.
-The trial still needs multi-seed validation. [ROADMAP.md](ROADMAP.md) lists the
-data collection, orchard physics, randomization, and training gates.
