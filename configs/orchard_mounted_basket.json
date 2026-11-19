@@ -1,0 +1,25 @@
+{
+  "enabled": true,
+  "robot_prim_path": "/World/envs/env_0/Robot",
+  "parent_link_path": "/World/envs/env_0/Robot/pelvis",
+  "basket_prim_path": "/World/envs/env_0/MountedBasket",
+  "joint_path": "/World/envs/env_0/MountedBasketJoint",
+  "mount_position_m": [
+    0.35,
+    0.0,
+    -0.22
+  ],
+  "mount_orientation_xyzw": [
+    0.0,
+    0.0,
+    0.0,
+    1.0
+  ],
+  "inner_size_m": [
+    0.36,
+    0.32,
+    0.15
+  ],
+  "wall_thickness_m": 0.01,
+  "dry_mass_kg": 0.5
+}
