@@ -106,6 +106,34 @@ velocity, and the attached flag.
 **Episode ends** on success (apple resting in the basket for 15 steps), on the apple
 hitting the ground, or on timeout. Each can be switched off in the config.
 
+## Rough ground
+
+`OrchardEnvCfg.ground = "rough"` (or the `Harvest-Orchard-Rough-v0` / `Harvest-Orchard-RL-Rough-v0`
+tasks) replaces the flat ground plane with mild uneven orchard ground built with `isaaclab.terrains`
+(`harvest_rl/terrain.py`): undulations plus bumps at 7x the first (mild) preset, i.e. bumps up to
++-14 cm and undulations up to +-35 cm; heights reach about +-0.45 m and slopes up to ~55 deg (a few
+percent of cells exceed Isaac Lab's 0.75 slope threshold and become vertical faces). Lower
+`bump_amplitude`/`undulation_amplitude` in `OrchardRoughTerrainCfg` for milder ground. The default stays `"flat"`, so existing tasks and checkpoints are unchanged.
+
+- It is an ordinary `TerrainImporterCfg` (`terrain_type="generator"`) with one custom height-field
+  sub-terrain, meshed by Isaac Lab's `convert_height_field_to_mesh`.
+- The ground is exactly flat at height 0 under the tree base, the robot's feet and the basket
+  pedestal (keep-out discs, `OrchardEnvCfg.rough_ground_keepouts()`), with a smooth blend around
+  them, so no asset is buried or floating. Tile borders are flat too, so tiles meet without steps.
+- Isaac Lab 3 clones envs onto a fixed grid and leaves the static tree there, so the terrain has
+  one tile per env on exactly that grid; `OrchardEnv` reshapes it for the final `num_envs` and
+  points `scene.env_origins` back at the grid.
+- `ground_difficulty` sets the roughness range across tiles (0 = mildest).
+
+```bat
+:: offline tests (no simulator): flat pads, mild heights/slopes, tiles on the env grid
+python -m pytest tests\test_terrain.py
+:: in Isaac: terrain visible + collidable, pads flat, robot/apple unaffected, drops land on it, reset
+isaaclab.bat -p C:\isaac\harvest_rl\scripts\check_terrain.py --mode orchard
+:: picture of a rough tile with the orchard on it -> outputs\terrain_snapshot.png
+isaaclab.bat -p C:\isaac\harvest_rl\scripts\check_terrain.py --mode snapshot
+```
+
 ## The stem
 
 The apple is the **YCB `013_apple`** scan at real size (7.5 × 7.5 × 7.2 cm, textured,
@@ -158,6 +186,8 @@ tests/
 - **One target apple** (fruit 28). It is the only fruit that `tree.usda` leaves out and the
   only one clear of branches. The other 39 apples are visual only; at YCB size, 15 of them
   poke into branches (visual only, so it has no physical effect).
+- **Rough ground is checked with the fixed-pelvis G1 only.** A free-floating G1 with PD-only joints
+  (no balance controller) folds over on flat ground too, so free standing is not a terrain test.
 - **The tree and basket are fixed.** There is no randomization yet besides the stem break
   force and `reset_joint_noise`.
 - **Leaves are visual only**; only the wood collides.

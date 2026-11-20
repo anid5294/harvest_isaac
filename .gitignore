@@ -18,3 +18,6 @@ __pycache__/
 
 # OS metadata
 .DS_Store
+
+# Generated USD assets for the G1 harvest benchmark (rebuilt automatically on first use).
+harvest_rl/harvest_rl/assets/generated/

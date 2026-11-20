@@ -37,6 +37,7 @@ from isaaclab.utils.math import axis_angle_from_quat, quat_conjugate, quat_mul
 
 from .orchard_env_cfg import BASKET_INNER_SIZE, FRUIT, OrchardEnvCfg, basket_center
 from .task_logic import FAILURE_NAMES, HarvestParams, HarvestTracker
+from .terrain import align_env_origins_to_grid, finalize_orchard_terrain
 
 
 class OrchardEnv(DirectRLEnv):
@@ -49,7 +50,13 @@ class OrchardEnv(DirectRLEnv):
     # Setup
     # ------------------------------------------------------------------------------------
 
+    def __init__(self, cfg: OrchardEnvCfg, render_mode: str | None = None, **kwargs):
+        # Rough ground: one terrain tile per env, laid out on the final env grid.
+        finalize_orchard_terrain(cfg.scene)
+        super().__init__(cfg, render_mode, **kwargs)
+
     def _setup_scene(self):
+        align_env_origins_to_grid(self.scene)
         self._robot = self.scene["robot"]
         self._apple = self.scene["apple"]
         self._apple_contact = self.scene["apple_contact"]

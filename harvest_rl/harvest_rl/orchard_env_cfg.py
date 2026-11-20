@@ -22,10 +22,12 @@ from isaaclab.envs import DirectRLEnvCfg
 from isaaclab.scene import InteractiveSceneCfg
 from isaaclab.sensors import CameraCfg, ContactSensorCfg
 from isaaclab.sim import SimulationCfg
+from isaaclab.terrains import TerrainImporterCfg
 from isaaclab.utils import configclass
 from isaaclab.visualizers import VisualizerCfg
 
 from .robot import ROBOT, RobotSpec
+from .terrain import orchard_terrain_cfg
 from .tree import APPLE_USD, TREE_USD, load_fruit
 
 FRUIT = load_fruit()
@@ -201,6 +203,9 @@ class OrchardSceneCfg(InteractiveSceneCfg):
     robot: ArticulationCfg = MISSING
     apple_contact: ContactSensorCfg | None = None
 
+    # Rough orchard ground (``OrchardEnvCfg.ground = "rough"``); replaces ``ground`` when set.
+    terrain: TerrainImporterCfg | None = None
+
 
 @configclass
 class OrchardEnvCfg(DirectRLEnvCfg):
@@ -280,7 +285,29 @@ class OrchardEnvCfg(DirectRLEnvCfg):
     reset_joint_noise: float = 0.0
     """Uniform noise [rad] added to the robot's home joint positions on reset (0 in harvest_isaac)."""
 
+    # -- ground
+    ground: str = "flat"
+    """``"flat"``: harvest_isaac's ground plane. ``"rough"``: mild uneven orchard ground built with
+    ``isaaclab.terrains`` (see :mod:`harvest_rl.terrain`), flat under the tree, the robot's feet and
+    the basket pedestal so every asset keeps its authored height."""
+    ground_difficulty: tuple[float, float] = (0.0, 1.0)
+    """Roughness range across tiles for ``ground = "rough"`` (0 = mildest, 1 = the configured max)."""
+
+    def rough_ground_keepouts(self) -> list[tuple[float, float, float]]:
+        """Flat pads ``(x, y, radius)`` in env-local metres: tree base, robot feet, basket pedestal."""
+        x, y, _ = self.robot.stance_offset
+        bx, by, _ = basket_center()
+        return [(0.0, 0.0, 0.45), (FRUIT.center[0] + x, FRUIT.center[1] + y, 0.45), (bx, by, 0.20)]
+
     def __post_init__(self):
+        if self.ground == "rough":
+            self.scene.ground = None
+            self.scene.terrain = orchard_terrain_cfg(
+                self.rough_ground_keepouts(), num_envs=self.scene.num_envs, env_spacing=self.scene.env_spacing,
+                difficulty_range=self.ground_difficulty,
+            )
+        elif self.ground != "flat":
+            raise ValueError(f"Unknown ground: {self.ground!r}")
         spec = self.robot
         x, y, z = spec.stance_offset
         self.scene.robot = spec.articulation.replace(
@@ -313,3 +340,17 @@ class OrchardRLEnvCfg(OrchardEnvCfg):
     cameras: bool = False
     observation_mode: str = "state"
     num_rerenders_on_reset: int = 0
+
+
+@configclass
+class OrchardRoughEnvCfg(OrchardEnvCfg):
+    """``Harvest-Orchard-v0`` on rough orchard ground (task 1 of the G1 instructions)."""
+
+    ground: str = "rough"
+
+
+@configclass
+class OrchardRoughRLEnvCfg(OrchardRLEnvCfg):
+    """``Harvest-Orchard-RL-v0`` on rough orchard ground."""
+
+    ground: str = "rough"
